@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"reflect"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -23,8 +24,11 @@ func TestFeatures(t *testing.T) {
 		Name:                "conformance",
 		ScenarioInitializer: InitializeScenario,
 		Options: &godog.Options{
-			Format:   "pretty",
-			Paths:    []string{"../specs/features/effects.feature"},
+			Format: "pretty",
+			Paths: []string{
+				"../specs/features/effects.feature",
+				"../specs/features/coeffects.feature",
+			},
 			TestingT: t,
 		},
 	}
@@ -43,6 +47,7 @@ func InitializeScenario(sc *godog.ScenarioContext) {
 		return ctx, nil
 	})
 	registerEffectSteps(sc)
+	registerCoeffectSteps(sc)
 }
 
 // handle is the value type of the key whose comparator the effects feature
@@ -82,10 +87,20 @@ type world struct {
 	stringKeys map[string]spc.Key[string]
 	handleKeys map[string]spc.Key[handle]
 
-	fiber   spc.FiberID
-	inst    *rt.Instance
-	fibers  map[string]spc.FiberID
-	lastKey string
+	fiber     spc.FiberID
+	dependent spc.FiberID
+	inst      *rt.Instance
+	fibers    map[string]spc.FiberID
+	lastKey   string
+
+	pending           rt.Component
+	provider          spc.FiberID
+	providerInst      *rt.Instance
+	cycleFirst        spc.FiberID
+	lastErr           error
+	transitions       int
+	transitionsBefore int
+	fiberCountBefore  int
 
 	before  map[string]string
 	record  map[string]string
@@ -269,6 +284,57 @@ func (w *world) emissions(peer string) []string {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	return append([]string(nil), w.emitted[peer]...)
+}
+
+func (w *world) bumpTransitions() {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.transitions++
+}
+
+func (w *world) transitionCount() int {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.transitions
+}
+
+func (w *world) waitEvent(name string) error {
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if w.hasEvent(name) {
+			return nil
+		}
+		time.Sleep(time.Millisecond)
+	}
+	return fmt.Errorf("event %q never happened (events %v)", name, w.eventsSnapshot())
+}
+
+func (w *world) waitEventPrefix(prefix string) error {
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if w.eventIndex(prefix) >= 0 {
+			return nil
+		}
+		time.Sleep(time.Millisecond)
+	}
+	return fmt.Errorf("no event with prefix %q (events %v)", prefix, w.eventsSnapshot())
+}
+
+func (w *world) eventsSnapshot() []string {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return append([]string(nil), w.events...)
+}
+
+func (w *world) eventIndex(prefix string) int {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	for i, e := range w.events {
+		if strings.HasPrefix(e, prefix) {
+			return i
+		}
+	}
+	return -1
 }
 
 func equalState(a, b map[string]string) bool { return reflect.DeepEqual(a, b) }
