@@ -29,6 +29,7 @@ const (
 	evInsert eventKind = iota
 	evRetire
 	evRemove
+	evReload
 	evBinding
 	evInspect
 	evActivationDone
@@ -146,6 +147,14 @@ func (s *Scheduler) Remove(id context.FiberID) error {
 	return s.call(event{kind: evRemove, id: id}).err
 }
 
+// Reload replaces the fiber's configuration payload and reloads it: the
+// fiber deactivates, then activates again against the same environment once
+// the transition completes. A failed fiber is not reloaded; a revision
+// re-inserts it as a fresh instance.
+func (s *Scheduler) Reload(id context.FiberID, payload any) error {
+	return s.call(event{kind: evReload, id: id, payload: payload}).err
+}
+
 // Inspect returns a snapshot of one fiber.
 func (s *Scheduler) Inspect(id context.FiberID) (FiberInfo, bool) {
 	r := s.call(event{kind: evInspect, id: id})
@@ -186,6 +195,8 @@ func (s *Scheduler) loop() {
 			s.handleRetire(ev)
 		case evRemove:
 			s.handleRemove(ev)
+		case evReload:
+			s.handleReload(ev)
 		case evBinding:
 			s.handleBinding(ev)
 		case evInspect:
@@ -258,6 +269,25 @@ func (s *Scheduler) handleRemove(ev event) {
 		s.deleteFiber(f)
 	case StateActive:
 		s.startUnload(f)
+	}
+	ev.reply(reply{})
+}
+
+func (s *Scheduler) handleReload(ev event) {
+	f := s.fibers[ev.id]
+	if f == nil {
+		ev.reply(reply{err: fmt.Errorf("runtime: unknown fiber %d", ev.id)})
+		return
+	}
+	f.payload = ev.payload
+	f.retired = false
+	switch f.state {
+	case StateActive:
+		s.startUnload(f)
+	case StateInactive:
+		if view, ok := s.targetView(f); ok {
+			s.startActivation(f, view)
+		}
 	}
 	ev.reply(reply{})
 }
