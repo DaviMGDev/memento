@@ -30,10 +30,11 @@ type bindingTable map[KeyID]*binding
 // by deriving. A binding installed at a context shadows an ancestor's
 // binding for that context's subtree only.
 type Context struct {
-	parent  *Context
-	fiber   FiberID
-	effects *Accumulator
-	table   atomic.Pointer[bindingTable]
+	parent   *Context
+	fiber    FiberID
+	effects  *Accumulator
+	observer Observer
+	table    atomic.Pointer[bindingTable]
 }
 
 // NewContext returns a root context owned by fiber.
@@ -133,6 +134,12 @@ func (c *Context) install(id KeyID, owner FiberID, v any) *binding {
 	prev := next[id]
 	next[id] = &binding{value: v, owner: owner}
 	c.table.Store(&next)
+
+	var prevOwner FiberID
+	if prev != nil {
+		prevOwner = prev.owner
+	}
+	c.notifyBinding(id, prevOwner, owner, true)
 	return prev
 }
 
@@ -158,5 +165,6 @@ func (c *Context) withdraw(id KeyID, owner FiberID) (*binding, bool) {
 		}
 	}
 	c.table.Store(&next)
+	c.notifyBinding(id, owner, RootFiber, false)
 	return removed, true
 }
