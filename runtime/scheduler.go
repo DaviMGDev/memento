@@ -352,6 +352,9 @@ func (s *Scheduler) handleDeactivationDone(ev event) {
 	}
 	f.setState(StateInactive)
 	s.releaseWaits(f.id)
+	// The committed view is discarded only after every inverse has run; a
+	// re-activation commits a fresh one.
+	f.view = nil
 	if s.finishRemove(f) {
 		return
 	}
