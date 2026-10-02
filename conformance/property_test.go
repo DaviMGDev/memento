@@ -162,3 +162,199 @@ func TestEffectWitnessRejectsMisuse(t *testing.T) {
 		t.Fatal("CheckEffectWitness accepted a non-positive iteration count")
 	}
 }
+
+// mapState observes a map-valued key and keeps a shadow copy for computing
+// inverses.
+type mapState struct {
+	ctx  *spc.Context
+	key  spc.Key[map[string]string]
+	live map[string]string
+}
+
+func (s *mapState) Snapshot() any {
+	value, ok := s.key.Lookup(s.ctx)
+	if !ok {
+		return map[string]string{}
+	}
+	out := make(map[string]string, len(value))
+	for k, v := range value {
+		out[k] = v
+	}
+	return out
+}
+
+func (s *mapState) Equivalent(before, after any) bool {
+	return reflect.DeepEqual(before, after)
+}
+
+func (s *mapState) shadow() map[string]string {
+	out := make(map[string]string, len(s.live))
+	for k, v := range s.live {
+		out[k] = v
+	}
+	return out
+}
+
+func TestCoeffectCommutativityHoldsOnIndependentOperations(t *testing.T) {
+	ctx := spc.NewContext(spc.RootFiber).Derive(1)
+	acc := ctx.Effects()
+	key := spc.NewKey[map[string]string]("map")
+	state := &mapState{ctx: ctx, key: key, live: map[string]string{}}
+
+	put := func(k, v string) OutcomeOperation {
+		return func() (any, func() error, error) {
+			previous := state.shadow()
+			next := state.shadow()
+			next[k] = v
+			if err := key.Bind(ctx, next); err != nil {
+				return nil, nil, err
+			}
+			state.live = next
+			return "ok", func() error {
+				state.live = previous
+				return nil
+			}, nil
+		}
+	}
+	get := func(k string) OutcomeOperation {
+		return func() (any, func() error, error) {
+			v, ok := state.live[k]
+			return []any{v, ok}, nil, nil
+		}
+	}
+
+	ops := []OutcomeOperation{put("a", "1"), put("b", "2"), get("c")}
+	if err := CheckCoeffectCommutativity(acc, state, ops); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestCoeffectCommutativityDetectsDependentOperations(t *testing.T) {
+	ctx := spc.NewContext(spc.RootFiber).Derive(1)
+	acc := ctx.Effects()
+	key := spc.NewKey[map[string]string]("map")
+	state := &mapState{ctx: ctx, key: key, live: map[string]string{}}
+
+	put := func(k, v string) OutcomeOperation {
+		return func() (any, func() error, error) {
+			previous := state.shadow()
+			next := state.shadow()
+			next[k] = v
+			if err := key.Bind(ctx, next); err != nil {
+				return nil, nil, err
+			}
+			state.live = next
+			return "ok", func() error {
+				state.live = previous
+				return nil
+			}, nil
+		}
+	}
+
+	// Two writes to the same entry are dependent: the orders disagree.
+	ops := []OutcomeOperation{put("a", "1"), put("a", "2")}
+	if err := CheckCoeffectCommutativity(acc, state, ops); err == nil {
+		t.Fatal("CheckCoeffectCommutativity accepted dependent operations")
+	}
+}
+
+func TestLIFOReversalOnRandomSequences(t *testing.T) {
+	ctx := spc.NewContext(spc.RootFiber).Derive(1)
+	acc := ctx.Effects()
+	rng := rand.New(rand.NewSource(11))
+
+	for i := 0; i < 200; i++ {
+		var applied, reverted []int
+		length := 1 + rng.Intn(8)
+		for j := 0; j < length; j++ {
+			j := j
+			applied = append(applied, j)
+			acc.Push(func() error {
+				reverted = append(reverted, j)
+				return nil
+			})
+		}
+		if err := acc.Revert(); err != nil {
+			t.Fatalf("iteration %d: Revert() = %v", i, err)
+		}
+		if len(reverted) != len(applied) {
+			t.Fatalf("iteration %d: reverted %d effects, want %d", i, len(reverted), len(applied))
+		}
+		for k := range applied {
+			if reverted[k] != applied[len(applied)-1-k] {
+				t.Fatalf("iteration %d: revert order %v, want the reverse of %v", i, reverted, applied)
+			}
+		}
+	}
+}
+
+func randomPayload(rng *rand.Rand) string { return fmt.Sprintf("p%d", rng.Intn(5)) }
+
+func TestReconciliationConvergesOnRandomRevisions(t *testing.T) {
+	rng := rand.New(rand.NewSource(99))
+	for run := 0; run < 15; run++ {
+		w := newWorld()
+		if err := w.ensureConfigFactories(); err != nil {
+			t.Fatal(err)
+		}
+		w.setEntry("database", "database", "v0", true)
+		w.setEntry("console", "console", "c0", true)
+		if err := w.applyConfig(); err != nil {
+			t.Fatalf("run %d: initial reconcile: %v", run, err)
+		}
+
+		for step := 0; step < 12; step++ {
+			switch rng.Intn(5) {
+			case 0:
+				ref := "database"
+				if rng.Intn(2) == 0 {
+					ref = "cache"
+				}
+				w.setEntry("database", ref, randomPayload(rng), true)
+			case 1:
+				w.setEntry("console", "console", randomPayload(rng), rng.Intn(2) == 0)
+			case 2:
+				w.mu.Lock()
+				delete(w.entries, "console")
+				w.mu.Unlock()
+			case 3:
+				w.setEntry("console", "console", randomPayload(rng), true)
+			case 4:
+				w.setEntry("database", "database", randomPayload(rng), rng.Intn(2) == 0)
+			}
+			if err := w.applyConfig(); err != nil {
+				t.Fatalf("run %d step %d: reconcile: %v", run, step, err)
+			}
+		}
+
+		fresh := newWorld()
+		if err := fresh.ensureConfigFactories(); err != nil {
+			t.Fatal(err)
+		}
+		w.mu.Lock()
+		for id, entry := range w.entries {
+			fresh.entries[id] = entry
+		}
+		w.mu.Unlock()
+		if err := fresh.applyConfig(); err != nil {
+			t.Fatalf("run %d: from-scratch reconcile: %v", run, err)
+		}
+
+		if got, want := w.recordSnapshot(), fresh.recordSnapshot(); !equalState(got, want) {
+			t.Fatalf("run %d: incremental bindings %v, from-scratch %v", run, got, want)
+		}
+		incremental, fromScratch := w.snapshotConfig(), fresh.snapshotConfig()
+		if len(incremental) != len(fromScratch) {
+			t.Fatalf("run %d: incremental has %d entries, from-scratch has %d", run, len(incremental), len(fromScratch))
+		}
+		for id, snap := range incremental {
+			other, ok := fromScratch[id]
+			if !ok || other.state != snap.state {
+				t.Fatalf("run %d: entry %q incremental %v, from-scratch %v", run, id, snap.state, other.state)
+			}
+		}
+
+		w.close()
+		fresh.close()
+	}
+}
