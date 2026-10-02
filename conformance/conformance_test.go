@@ -26,10 +26,12 @@ func TestFeatures(t *testing.T) {
 		ScenarioInitializer: InitializeScenario,
 		Options: &godog.Options{
 			Format: "pretty",
+			Strict: true,
 			Paths: []string{
 				"../specs/features/effects.feature",
 				"../specs/features/coeffects.feature",
 				"../specs/features/lifecycle.feature",
+				"../specs/features/configuration.feature",
 			},
 			TestingT: t,
 		},
@@ -51,6 +53,7 @@ func InitializeScenario(sc *godog.ScenarioContext) {
 	registerEffectSteps(sc)
 	registerCoeffectSteps(sc)
 	registerLifecycleSteps(sc)
+	registerConfigurationSteps(sc)
 }
 
 // handle is the value type of the key whose comparator the effects feature
@@ -120,6 +123,11 @@ type world struct {
 	unloadReleased    bool
 	unloadDoneClosed  bool
 
+	entries      map[string]loader.Entry
+	instantiated map[string]int
+	activations  map[string]int
+	configBefore map[string]fiberSnapshot
+
 	before  map[string]string
 	record  map[string]string
 	order   []string
@@ -138,6 +146,10 @@ func newWorld() *world {
 		stringKeys:        make(map[string]spc.Key[string]),
 		handleKeys:        make(map[string]spc.Key[handle]),
 		fibers:            make(map[string]spc.FiberID),
+		entries:           make(map[string]loader.Entry),
+		instantiated:      make(map[string]int),
+		activations:       make(map[string]int),
+		configBefore:      make(map[string]fiberSnapshot),
 		record:            make(map[string]string),
 		reverts:           make(map[string]int),
 		emitted:           make(map[string][]string),
