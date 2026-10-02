@@ -222,5 +222,6 @@ Keys are the compatibility surface. A key's value type and declared operations a
 - D5 — Single scheduler control plane with workers. Trade-off: determinism and race-freedom versus a coordination bottleneck, mitigated by workers.
 - D6 — Declarative loader with per-field reconciliation and from-scratch convergence. Trade-off: more code paths versus preserving live state.
 - D7 — Witness obligations enforced by a shipped property-test harness. Trade-off: zero runtime cost versus correctness not enforced in production.
+- D8 — Module and package naming: `github.com/DaviMGDev/memento`, with packages `context`, `runtime`, `loader`, `conformance`. Trade-off: the `context` and `runtime` package names shadow the standard library's, requiring import aliases where both are used, against vocabulary fidelity to the paradigm.
 
-Open points: isolation model (tree shadowing versus realm tables); verification level (harness versus contract only); project naming.
+Resolved since drafting: isolation model — single shared realm with tree shadowing for v1, realm tables deferred as an additive extension; verification level — contract plus the shipped property-test harness; naming — D8. No open points remain for v1.
