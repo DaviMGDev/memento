@@ -3,6 +3,7 @@ package runtime
 import (
 	"errors"
 	"fmt"
+	"sort"
 	"sync"
 
 	"github.com/DaviMGDev/memento/context"
@@ -23,6 +24,14 @@ type FiberInfo struct {
 	Err           error
 }
 
+// Snapshot is a read-only view of the whole registry: every fiber's state,
+// committed view, and the keys it currently owns, plus the active provider
+// of each key. It is a copy; mutating it does not touch the runtime.
+type Snapshot struct {
+	Fibers    []FiberInfo
+	Providers map[context.KeyID]context.FiberID
+}
+
 type eventKind uint8
 
 const (
@@ -32,6 +41,7 @@ const (
 	evReload
 	evBinding
 	evInspect
+	evSnapshot
 	evActivationDone
 	evDeactivationDone
 	evClose
@@ -40,6 +50,7 @@ const (
 type reply struct {
 	id   context.FiberID
 	info FiberInfo
+	snap Snapshot
 	ok   bool
 	err  error
 }
@@ -161,6 +172,11 @@ func (s *Scheduler) Inspect(id context.FiberID) (FiberInfo, bool) {
 	return r.info, r.ok
 }
 
+// Snapshot returns a read-only view of the whole registry.
+func (s *Scheduler) Snapshot() Snapshot {
+	return s.call(event{kind: evSnapshot}).snap
+}
+
 // BindingChanged implements context.Observer.
 func (s *Scheduler) BindingChanged(id context.KeyID, previous, current context.FiberID, installed bool) {
 	s.post(event{kind: evBinding, key: id, prev: previous, curr: current, installed: installed})
@@ -201,6 +217,8 @@ func (s *Scheduler) loop() {
 			s.handleBinding(ev)
 		case evInspect:
 			s.handleInspect(ev)
+		case evSnapshot:
+			s.handleSnapshot(ev)
 		case evActivationDone:
 			s.handleActivationDone(ev)
 		case evDeactivationDone:
@@ -299,6 +317,21 @@ func (s *Scheduler) handleInspect(ev event) {
 		return
 	}
 	ev.reply(reply{ok: true, info: s.snapshot(f)})
+}
+
+func (s *Scheduler) handleSnapshot(ev event) {
+	snap := Snapshot{
+		Fibers:    make([]FiberInfo, 0, len(s.fibers)),
+		Providers: make(map[context.KeyID]context.FiberID, len(s.providers)),
+	}
+	for _, f := range s.fibers {
+		snap.Fibers = append(snap.Fibers, s.snapshot(f))
+	}
+	sort.Slice(snap.Fibers, func(i, j int) bool { return snap.Fibers[i].ID < snap.Fibers[j].ID })
+	for k, p := range s.providers {
+		snap.Providers[k] = p
+	}
+	ev.reply(reply{snap: snap})
 }
 
 func (s *Scheduler) handleBinding(ev event) {
