@@ -3,6 +3,7 @@ package conformance
 import (
 	"fmt"
 	"math/rand"
+	"reflect"
 
 	"github.com/DaviMGDev/memento/context"
 )
@@ -64,4 +65,76 @@ func CheckEffectWitness(acc *context.Accumulator, state WitnessState, ops []Oper
 		}
 	}
 	return nil
+}
+
+// OutcomeOperation applies one coeffect operation, yields its outcome, and
+// returns the inverse that reverts it.
+type OutcomeOperation func() (outcome any, inverse func() error, err error)
+
+// CheckCoeffectCommutativity checks the coeffect witness: for every pair of
+// operations, applying them in either order reaches equivalent states and
+// yields equal outcomes.
+func CheckCoeffectCommutativity(acc *context.Accumulator, state WitnessState, ops []OutcomeOperation) error {
+	if acc == nil {
+		return fmt.Errorf("conformance: coeffect commutativity requires an accumulator")
+	}
+	if state == nil {
+		return fmt.Errorf("conformance: coeffect commutativity requires a state")
+	}
+	if len(ops) == 0 {
+		return fmt.Errorf("conformance: coeffect commutativity requires at least one operation")
+	}
+	for i := range ops {
+		for j := i; j < len(ops); j++ {
+			if err := checkCommutativity(acc, state, ops[i], ops[j]); err != nil {
+				return fmt.Errorf("conformance: coeffect commutativity violated for operations %d and %d: %w", i, j, err)
+			}
+		}
+	}
+	return nil
+}
+
+func checkCommutativity(acc *context.Accumulator, state WitnessState, first, second OutcomeOperation) error {
+	if err := acc.Revert(); err != nil {
+		return err
+	}
+
+	abOutcomes, abState, err := runPair(acc, state, first, second)
+	if err != nil {
+		return err
+	}
+	// runPair returns the outcomes in application order, so the second
+	// order yields them swapped.
+	baOutcomes, baState, err := runPair(acc, state, second, first)
+	if err != nil {
+		return err
+	}
+
+	if !reflect.DeepEqual(abOutcomes[0], baOutcomes[1]) || !reflect.DeepEqual(abOutcomes[1], baOutcomes[0]) {
+		return fmt.Errorf("outcomes differ: %v vs %v", abOutcomes, baOutcomes)
+	}
+	if !state.Equivalent(abState, baState) {
+		return fmt.Errorf("states differ: %v vs %v", abState, baState)
+	}
+	return nil
+}
+
+func runPair(acc *context.Accumulator, state WitnessState, first, second OutcomeOperation) ([]any, any, error) {
+	outcome1, inverse1, err := first()
+	if err != nil {
+		return nil, nil, err
+	}
+	acc.Push(inverse1)
+
+	outcome2, inverse2, err := second()
+	if err != nil {
+		return nil, nil, err
+	}
+	acc.Push(inverse2)
+
+	snapshot := state.Snapshot()
+	if err := acc.Revert(); err != nil {
+		return nil, nil, err
+	}
+	return []any{outcome1, outcome2}, snapshot, nil
 }
