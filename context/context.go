@@ -30,9 +30,10 @@ type bindingTable map[KeyID]*binding
 // by deriving. A binding installed at a context shadows an ancestor's
 // binding for that context's subtree only.
 type Context struct {
-	parent *Context
-	fiber  FiberID
-	table  atomic.Pointer[bindingTable]
+	parent  *Context
+	fiber   FiberID
+	effects *Accumulator
+	table   atomic.Pointer[bindingTable]
 }
 
 // NewContext returns a root context owned by fiber.
@@ -47,6 +48,9 @@ func (c *Context) Derive(fiber FiberID) *Context {
 
 func newContext(parent *Context, fiber FiberID) *Context {
 	c := &Context{parent: parent, fiber: fiber}
+	if parent != nil {
+		c.effects = &Accumulator{}
+	}
 	empty := bindingTable{}
 	c.table.Store(&empty)
 	return c
@@ -66,6 +70,15 @@ func (c *Context) Fiber() FiberID {
 		return RootFiber
 	}
 	return c.fiber
+}
+
+// Effects returns the accumulator of inverses owned by the fiber this
+// context belongs to. Root contexts have no fiber and return nil.
+func (c *Context) Effects() *Accumulator {
+	if c == nil {
+		return nil
+	}
+	return c.effects
 }
 
 // lookup returns the nearest binding for id at c or any ancestor.
