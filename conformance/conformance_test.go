@@ -2,6 +2,7 @@ package conformance
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"reflect"
 	"strings"
@@ -28,6 +29,7 @@ func TestFeatures(t *testing.T) {
 			Paths: []string{
 				"../specs/features/effects.feature",
 				"../specs/features/coeffects.feature",
+				"../specs/features/lifecycle.feature",
 			},
 			TestingT: t,
 		},
@@ -48,6 +50,7 @@ func InitializeScenario(sc *godog.ScenarioContext) {
 	})
 	registerEffectSteps(sc)
 	registerCoeffectSteps(sc)
+	registerLifecycleSteps(sc)
 }
 
 // handle is the value type of the key whose comparator the effects feature
@@ -102,6 +105,21 @@ type world struct {
 	transitionsBefore int
 	fiberCountBefore  int
 
+	secondDependent spc.FiberID
+	entryFiber      spc.FiberID
+	entryFiberNew   spc.FiberID
+
+	activationStarted chan struct{}
+	activationRelease chan struct{}
+	activationDone    chan struct{}
+	unloadRelease     chan struct{}
+	unloadDone        chan struct{}
+	actStarted        bool
+	actReleased       bool
+	actDone           bool
+	unloadReleased    bool
+	unloadDoneClosed  bool
+
 	before  map[string]string
 	record  map[string]string
 	order   []string
@@ -115,14 +133,19 @@ type world struct {
 
 func newWorld() *world {
 	w := &world{
-		sched:      rt.New(),
-		reg:        loader.NewRegistry(),
-		stringKeys: make(map[string]spc.Key[string]),
-		handleKeys: make(map[string]spc.Key[handle]),
-		fibers:     make(map[string]spc.FiberID),
-		record:     make(map[string]string),
-		reverts:    make(map[string]int),
-		emitted:    make(map[string][]string),
+		sched:             rt.New(),
+		reg:               loader.NewRegistry(),
+		stringKeys:        make(map[string]spc.Key[string]),
+		handleKeys:        make(map[string]spc.Key[handle]),
+		fibers:            make(map[string]spc.FiberID),
+		record:            make(map[string]string),
+		reverts:           make(map[string]int),
+		emitted:           make(map[string][]string),
+		activationStarted: make(chan struct{}),
+		activationRelease: make(chan struct{}),
+		activationDone:    make(chan struct{}),
+		unloadRelease:     make(chan struct{}),
+		unloadDone:        make(chan struct{}),
 	}
 	w.ld = loader.New(w.sched, w.reg)
 	return w
@@ -338,3 +361,75 @@ func (w *world) eventIndex(prefix string) int {
 }
 
 func equalState(a, b map[string]string) bool { return reflect.DeepEqual(a, b) }
+
+func (w *world) markActivationStarted() {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if !w.actStarted {
+		close(w.activationStarted)
+		w.actStarted = true
+	}
+}
+
+func (w *world) markActivationDone() {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if !w.actDone {
+		close(w.activationDone)
+		w.actDone = true
+	}
+}
+
+func (w *world) releaseActivation() {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if !w.actReleased {
+		close(w.activationRelease)
+		w.actReleased = true
+	}
+}
+
+func (w *world) releaseUnload() {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if !w.unloadReleased {
+		close(w.unloadRelease)
+		w.unloadReleased = true
+	}
+}
+
+func (w *world) markUnloadDone() {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if !w.unloadDoneClosed {
+		close(w.unloadDone)
+		w.unloadDoneClosed = true
+	}
+}
+
+func (w *world) waitActivationStarted() error {
+	select {
+	case <-w.activationStarted:
+		return nil
+	case <-time.After(3 * time.Second):
+		return errors.New("the activation never started")
+	}
+}
+
+func (w *world) waitActivationDone() error {
+	select {
+	case <-w.activationDone:
+		return nil
+	case <-time.After(3 * time.Second):
+		return errors.New("the activation never completed")
+	}
+}
+
+func (w *world) waitUnloadDone() error {
+	select {
+	case <-w.unloadDone:
+		return nil
+	case <-time.After(3 * time.Second):
+		return errors.New("the unload inverse never ran")
+	}
+}

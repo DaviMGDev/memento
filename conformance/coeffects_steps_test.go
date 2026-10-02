@@ -172,7 +172,7 @@ func stepComponentLoaded(ctx context.Context) error {
 		return err
 	}
 	w.dependent = w.fiber
-	return w.waitSettled(w.dependent)
+	return nil
 }
 
 func stepProviderActivates(ctx context.Context, name string) error {
