@@ -1,6 +1,13 @@
 package context
 
-import "fmt"
+import (
+	"fmt"
+	"reflect"
+)
+
+// Comparator decides whether two values at a key are observationally
+// equivalent for recovery claims.
+type Comparator[T any] func(a, b T) bool
 
 // KeyID is the identity of a typed key.
 //
@@ -45,9 +52,12 @@ type AnyKey interface {
 
 // keyCore is the shared identity cell of a key. Every copy of a Key shares
 // its *keyCore; every call to NewKey allocates a distinct cell, which is
-// what makes same-typed keys impossible to collide.
+// what makes same-typed keys impossible to collide. cmp holds the key's
+// declared comparator as a Comparator[T] (type-erased because keyCore is
+// shared by every instantiation of Key).
 type keyCore struct {
 	name string
+	cmp  any
 }
 
 // Key is a statically typed, package-level handle to a binding slot.
@@ -71,6 +81,31 @@ func NewKey[T any](name string) Key[T] {
 		name = "unnamed"
 	}
 	return Key[T]{core: &keyCore{name: name}}
+}
+
+// NewKeyWithComparator returns a fresh key whose recovery claims are
+// decided by cmp instead of the default deep equality. A nil comparator
+// selects the default. The comparator is the key's declared observational
+// equivalence: representations cmp treats as equal are interchangeable
+// for reclamation.
+func NewKeyWithComparator[T any](name string, cmp Comparator[T]) Key[T] {
+	k := NewKey[T](name)
+	if cmp != nil {
+		k.core.cmp = cmp
+	}
+	return k
+}
+
+// Equivalent reports whether a and b are observationally equivalent at k:
+// by the key's declared comparator when one was supplied, and by deep
+// equality otherwise.
+func (k Key[T]) Equivalent(a, b T) bool {
+	if k.core != nil && k.core.cmp != nil {
+		if cmp, ok := k.core.cmp.(Comparator[T]); ok {
+			return cmp(a, b)
+		}
+	}
+	return reflect.DeepEqual(a, b)
 }
 
 // IsZero reports whether k is the zero Key, which never identifies a
