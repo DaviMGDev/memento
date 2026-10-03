@@ -19,6 +19,7 @@ Project status: implemented
 | [features/coeffects.feature](features/coeffects.feature) | Reactive coeffects | Conformance scenarios: satisfaction, activation and deactivation, provider identity, teardown readability, cycle refusal |
 | [features/lifecycle.feature](features/lifecycle.feature) | Component lifecycle | Conformance scenarios: state transitions, inertia, chaining, failure terminality, instance independence |
 | [features/configuration.feature](features/configuration.feature) | Declarative configuration | Conformance scenarios: entries, incremental reconciliation, convergence |
+| [features/plugins.feature](features/plugins.feature) | In-process Lua plugins | Conformance scenario: Lua provider loading through typed host keys and dependency lifecycle |
 | [log.md](log.md) | specs/ log | Activity log of spec changes |
 
 Feature files are Gherkin-format citizens and carry no YAML frontmatter, since the Gherkin grammar has no frontmatter construct. Decision records (`adr/`) are added when decisions outgrow SPEC.md's Decisions section.

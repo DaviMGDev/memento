@@ -2,7 +2,10 @@ module github.com/DaviMGDev/memento
 
 go 1.23
 
-require github.com/cucumber/godog v0.16.0
+require (
+	github.com/cucumber/godog v0.16.0
+	github.com/yuin/gopher-lua v1.1.2
+)
 
 require (
 	github.com/cucumber/gherkin/go/v42 v42.0.0 // indirect
