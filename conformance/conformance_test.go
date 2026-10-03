@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"reflect"
 	"strings"
 	"sync"
@@ -32,6 +33,7 @@ func TestFeatures(t *testing.T) {
 				"../specs/features/coeffects.feature",
 				"../specs/features/lifecycle.feature",
 				"../specs/features/configuration.feature",
+				"../specs/features/plugins.feature",
 			},
 			TestingT: t,
 		},
@@ -54,6 +56,7 @@ func InitializeScenario(sc *godog.ScenarioContext) {
 	registerCoeffectSteps(sc)
 	registerLifecycleSteps(sc)
 	registerConfigurationSteps(sc)
+	registerLuaSteps(sc)
 }
 
 // handle is the value type of the key whose comparator the effects feature
@@ -137,6 +140,11 @@ type world struct {
 
 	original handle
 	current  handle
+
+	luaDir       string
+	luaKey       spc.Key[string]
+	luaKeyName   string
+	luaPluginRef string
 }
 
 func newWorld() *world {
@@ -163,7 +171,12 @@ func newWorld() *world {
 	return w
 }
 
-func (w *world) close() { _ = w.sched.Close() }
+func (w *world) close() {
+	_ = w.sched.Close()
+	if w.luaDir != "" {
+		_ = os.RemoveAll(w.luaDir)
+	}
+}
 
 func worldFrom(ctx context.Context) *world {
 	w, _ := ctx.Value(worldKey{}).(*world)

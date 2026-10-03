@@ -24,7 +24,7 @@ The paradigm this project implements reifies both guarantees as runtime mechanis
 This project is an independent Go implementation of the same paradigm, not a Cordis port:
 
 - preserved: revertible effects with LIFO recovery, reactive coeffect resolution by provider identity, dependency ordering, acyclic precedence, deterministic quiescence;
-- replaced: Proxy-mediated access becomes an explicit typed API; runtime module loading and hot replacement become instance reload through a component registry;
+- replaced: Proxy-mediated access becomes an explicit typed API; Go component resolution uses the factory registry, with optional trusted Lua scripts as an additive runtime extension;
 - deferred: realm-based isolation, interception metadata, value-level reactivity, out-of-process components.
 
 Goals: instance-level dynamic composition for Go services; complete reclamation of tracked effects; reactive dependency topology; deterministic convergence under reconfiguration; a behavioral conformance suite.
@@ -165,7 +165,7 @@ Every recovery claim holds up to an observational equivalence declared per key. 
 
 A configuration is a tree of entries. An entry declares a stable id (the reconciliation key), the component it instantiates (a registry reference), a configuration payload, an enabled/disabled flag, and optional isolation annotation. Entries are declarative: they describe the desired composition, not the operations to reach it.
 
-A component registry maps references to factories. Compiled Go cannot import modules by URL; the registry is populated at link time, or by extension packages for out-of-process components.
+A component registry maps references to factories. Compiled Go cannot import modules by URL; Go factories are registered by the host, while an optional Lua directory resolver loads trusted scripts at runtime. Lua scripts declare dependencies against host-registered typed keys.
 
 Reconciliation diffs the desired entry tree against live fibers:
 
@@ -184,6 +184,7 @@ The behavioral contract is specified as Gherkin features:
 - `features/coeffects.feature` — satisfaction, activation and deactivation, provider replacement versus in-place overwrite, teardown readability, cycle refusal.
 - `features/lifecycle.feature` — state transitions, inertia and chaining, failure terminality, instance independence.
 - `features/configuration.feature` — entries, per-field reconciliation, convergence to from-scratch state.
+- `features/plugins.feature` — trusted Lua loading through typed host keys and the normal dependency lifecycle.
 
 Property tests, shipped as a harness, cover the two witness obligations:
 
@@ -197,18 +198,18 @@ Additional invariants: LIFO reversal of any effect sequence returns the start st
 - **Performance**: effect registration is allocation-light — one closure per effect; notification is O(affected subscribers); the scheduler adds no lock contention on the hot read path.
 - **Portability**: Go 1.23+; no cgo; no code generation required in v1.
 - **Observability**: the registry is introspectable — fiber states, committed views, and binding ownership are queryable for diagnostics.
-- **Security posture**: access is declaration-based — a component sees the keys it declares; the runtime is not a sandbox, and untrusted code requires a process or embedder boundary.
+- **Security posture**: access is declaration-based — a component sees the keys it declares; the runtime is not a sandbox. Lua plugins execute as trusted host code; untrusted code requires a process or embedder boundary.
 - **Determinism**: the quiescent state is a function of the final configuration; repeated reconciliation is idempotent.
 
 ## Versioning
 
-Keys are the compatibility surface. A key's value type and declared operations are its interface; changing them is a breaking change, and carrying a version in the key's identity (namespacing) is recommended when independent ecosystems share a registry. Configuration payloads are versioned by the component that defines them. Extension points — realm tables, interception, out-of-process components — are additive and must not change the semantics above.
+Keys are the compatibility surface. A key's value type and declared operations are its interface; changing them is a breaking change, and carrying a version in the key's identity (namespacing) is recommended when independent ecosystems share a registry. Configuration payloads are versioned by the component that defines them. Extension points — Lua loading, realm tables, interception, and future out-of-process components — are additive and must not change the semantics above.
 
 ## Non-Goals
 
-- Code hot replacement: no in-process module reload; edited code requires a rebuild and process-level restart, or a component hosted out-of-process.
+- Native Go code hot replacement: changing a loaded Go component requires rebuilding and restarting the host. Lua files are read when an entry instantiates a component; active fibers keep the loaded source until re-instantiated.
 - Transparent property access: no Proxy-like mediation; access is explicit and typed.
-- Cross-process composition in v1: a documented seam exists, but distribution, RPC, and network failure mapping are out of scope.
+- Cross-process composition in v1: distribution, RPC, and network failure mapping are out of scope. A gRPC loader requires a separate protocol and failure-semantics decision.
 - Sandboxing: the runtime does not isolate untrusted code; it only constrains which dependencies a component declares.
 - Value-level reactivity: no signals; reactivity is at component and dependency granularity.
 - Realm-based isolation, interception metadata, and observational equivalence generation beyond per-key comparators.
@@ -223,5 +224,6 @@ Keys are the compatibility surface. A key's value type and declared operations a
 - D6 — Declarative loader with per-field reconciliation and from-scratch convergence. Trade-off: more code paths versus preserving live state.
 - D7 — Witness obligations enforced by a shipped property-test harness. Trade-off: zero runtime cost versus correctness not enforced in production.
 - D8 — Module and package naming: `github.com/DaviMGDev/memento`, with packages `context`, `runtime`, `loader`, `conformance`. Trade-off: the `context` and `runtime` package names shadow the standard library's, requiring import aliases where both are used, against vocabulary fidelity to the paradigm.
+- D9 — Lua plugins are trusted in-process components resolved from an optional host-configured directory; scripts name only host-registered typed keys, and bind/effect operations use the existing inverse accumulator. Cross-process gRPC loading remains deferred. Trade-off: dynamic extension without rebuilding the host, while preserving lifecycle guarantees and keeping distributed failure semantics out of v1.
 
-Resolved since drafting: isolation model — single shared realm with tree shadowing for v1, realm tables deferred as an additive extension; verification level — contract plus the shipped property-test harness; naming — D8. No open points remain for v1.
+Resolved since drafting: isolation model — single shared realm with tree shadowing for v1, realm tables deferred as an additive extension; verification level — contract plus the shipped property-test harness; naming — D8; plugin boundary — trusted Lua in-process with gRPC deferred, D9. No open points remain for v1.
