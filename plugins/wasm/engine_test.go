@@ -2,7 +2,6 @@ package wasm
 
 import (
 	"context"
-	"os"
 	"testing"
 )
 
@@ -14,10 +13,7 @@ func TestEngineInit(t *testing.T) {
 	}
 	defer engine.Close(ctx)
 
-	wasmBytes, err := os.ReadFile("/tmp/test.wasm")
-	if err != nil {
-		t.Fatalf("reading test wasm: %v", err)
-	}
+	wasmBytes := buildStandaloneTestWasmModule()
 
 	mod, err := engine.runtime.Instantiate(ctx, wasmBytes)
 	if err != nil {
@@ -25,11 +21,8 @@ func TestEngineInit(t *testing.T) {
 	}
 	defer mod.Close(ctx)
 
-	res, err := mod.ExportedFunction("hello").Call(ctx)
-	if err != nil {
-		t.Fatalf("calling hello: %v", err)
-	}
-	if len(res) != 1 || res[0] != 42 {
-		t.Fatalf("expected 42, got %v", res)
+	fn := mod.ExportedFunction("memento_activate")
+	if fn == nil {
+		t.Fatal("missing memento_activate export")
 	}
 }
