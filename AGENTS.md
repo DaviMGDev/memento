@@ -19,6 +19,14 @@ Follow standard Go formatting and idioms: tabs are applied by `gofmt`, exported 
 
 Add focused `_test.go` coverage in the owning package for behavior changes. Changes to lifecycle, effects, coeffects, or configuration should also update or extend the matching feature file and its conformance steps when appropriate. Preserve the project's guarantees with race-enabled tests; no separate coverage threshold is configured.
 
+## Baked-in / Default Plugins
+
+Default or baked-in plugins are ready-to-use components provided alongside the runtime, not core builtins. When adding or modifying plugins:
+
+- Do not alter root `specs/` (`specs/SPEC.md`, `specs/features/`). Core runtime specifications stay independent of specific plugins.
+- Treat plugins as external consumers of `context/`, `runtime/`, and `loader/`. Register via `loader.Registry`.
+- Each plugin must maintain its own isolated specification (e.g., `plugins/<name>/specs/`) and local test suite.
+
 ## Commit Convention
 
 Commits follow [Conventional Commits](https://www.conventionalcommits.org/):
@@ -53,6 +61,7 @@ Scope names the package or area the commit primarily touches:
 - `conformance` — Godog runner and property checks
 - `specs` — `SPEC.md`, feature files, and `specs/log.md`
 - `examples` — runnable examples
+- `plugins` — baked-in plugin packages
 
 Omit the scope for repo-wide changes, as in `docs: add the README quickstart` or `ci: vet and race-test every push and pull request`. When a new package appears, add its scope to this list in the commit that introduces it.
 
