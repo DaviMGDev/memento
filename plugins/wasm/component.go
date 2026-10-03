@@ -1,0 +1,207 @@
+package wasm
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"sync"
+	"sync/atomic"
+
+	"github.com/DaviMGDev/memento/loader"
+	"github.com/DaviMGDev/memento/runtime"
+	"github.com/tetratelabs/wazero"
+)
+
+var instanceCounter uint64
+
+// ComponentOption configures a WASM Component or Factory.
+type ComponentOption func(*componentConfig)
+
+type componentConfig struct {
+	keys *KeyRegistry
+	name string
+}
+
+// WithKeyRegistry configures a custom KeyRegistry.
+func WithKeyRegistry(keys *KeyRegistry) ComponentOption {
+	return func(c *componentConfig) {
+		c.keys = keys
+	}
+}
+
+// WithModuleName sets a prefix name for module instantiations.
+func WithModuleName(name string) ComponentOption {
+	return func(c *componentConfig) {
+		c.name = name
+	}
+}
+
+// WASMComponent wraps a compiled WASM module and implements runtime.Component.
+type WASMComponent struct {
+	engine   *Engine
+	compiled wazero.CompiledModule
+	decls    runtime.Declarations
+	keys     *KeyRegistry
+	cfg      componentConfig
+}
+
+// NewComponent compiles wasmBytes and returns a runtime.Component.
+func NewComponent(ctx context.Context, engine *Engine, wasmBytes []byte, opts ...ComponentOption) (*WASMComponent, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if engine == nil {
+		return nil, fmt.Errorf("wasm: nil engine")
+	}
+	if len(wasmBytes) == 0 {
+		return nil, fmt.Errorf("wasm: empty bytecode")
+	}
+
+	var cfg componentConfig
+	for _, opt := range opts {
+		opt(&cfg)
+	}
+	if cfg.keys == nil {
+		cfg.keys = NewKeyRegistry()
+	}
+	if cfg.name == "" {
+		cfg.name = "component"
+	}
+
+	// Ensure host module is registered in engine
+	if err := RegisterHostModule(ctx, engine.runtime); err != nil {
+		// Module may already be registered
+	}
+
+	compiled, err := engine.runtime.CompileModule(ctx, wasmBytes)
+	if err != nil {
+		return nil, fmt.Errorf("wasm: compiling module: %w", err)
+	}
+
+	// Probe declarations by instantiating a temporary probe instance
+	decls, err := probeDeclarations(ctx, engine.runtime, compiled, cfg.keys)
+	if err != nil {
+		return nil, fmt.Errorf("wasm: inspecting declarations: %w", err)
+	}
+
+	return &WASMComponent{
+		engine:   engine,
+		compiled: compiled,
+		decls:    decls,
+		keys:     cfg.keys,
+		cfg:      cfg,
+	}, nil
+}
+
+func probeDeclarations(ctx context.Context, r wazero.Runtime, compiled wazero.CompiledModule, keys *KeyRegistry) (runtime.Declarations, error) {
+	probeName := fmt.Sprintf("_probe_%d", atomic.AddUint64(&instanceCounter, 1))
+	mod, err := r.InstantiateModule(ctx, compiled, wazero.NewModuleConfig().WithName(probeName))
+	if err != nil {
+		return runtime.Declarations{}, fmt.Errorf("instantiating probe module: %w", err)
+	}
+	defer mod.Close(ctx)
+
+	declFn := mod.ExportedFunction("memento_declare")
+	if declFn == nil {
+		return runtime.Declarations{}, nil
+	}
+
+	st := &execState{}
+	execCtx := withExecState(ctx, st)
+	res, err := declFn.Call(execCtx)
+	if err != nil {
+		return runtime.Declarations{}, fmt.Errorf("calling memento_declare: %w", err)
+	}
+	if len(res) > 0 && res[0] != 0 {
+		return runtime.Declarations{}, fmt.Errorf("memento_declare failed with code %d", res[0])
+	}
+
+	var decls runtime.Declarations
+	for _, name := range st.injected {
+		decls.Inject = append(decls.Inject, keys.GetOrCreate(name))
+	}
+	for _, name := range st.provided {
+		decls.Provide = append(decls.Provide, keys.GetOrCreate(name))
+	}
+	return decls, nil
+}
+
+// Declarations implements runtime.Component.
+func (c *WASMComponent) Declarations() runtime.Declarations {
+	return c.decls
+}
+
+// Activate implements runtime.Component.
+func (c *WASMComponent) Activate(inst *runtime.Instance, payload any) error {
+	ctx := context.Background()
+	var payloadBytes []byte
+	if payload != nil {
+		switch p := payload.(type) {
+		case []byte:
+			payloadBytes = p
+		case string:
+			payloadBytes = []byte(p)
+		default:
+			data, err := json.Marshal(p)
+			if err != nil {
+				return fmt.Errorf("wasm: serializing payload: %w", err)
+			}
+			payloadBytes = data
+		}
+	}
+
+	instID := atomic.AddUint64(&instanceCounter, 1)
+	modName := fmt.Sprintf("%s_%d_%d", c.cfg.name, inst.FiberID(), instID)
+
+	mod, err := c.engine.runtime.InstantiateModule(ctx, c.compiled, wazero.NewModuleConfig().WithName(modName))
+	if err != nil {
+		return fmt.Errorf("wasm: instantiating module instance: %w", err)
+	}
+
+	var modMu sync.Mutex
+
+	// Push module cleanup as the bottom-most effect so it closes after all guest inverses run.
+	if err := inst.Context().RegisterEffect(func() (func() error, error) {
+		return func() error {
+			modMu.Lock()
+			defer modMu.Unlock()
+			return mod.Close(context.Background())
+		}, nil
+	}); err != nil {
+		_ = mod.Close(ctx)
+		return fmt.Errorf("wasm: registering cleanup effect: %w", err)
+	}
+
+	actFn := mod.ExportedFunction("memento_activate")
+	if actFn == nil {
+		return nil
+	}
+
+	st := &execState{
+		instance:     inst,
+		payloadBytes: payloadBytes,
+		mod:          mod,
+		modMu:        &modMu,
+	}
+	execCtx := withExecState(ctx, st)
+
+	modMu.Lock()
+	res, err := actFn.Call(execCtx)
+	modMu.Unlock()
+
+	if err != nil {
+		return fmt.Errorf("wasm: activate invocation failed: %w", err)
+	}
+	if len(res) > 0 && res[0] != 0 {
+		return fmt.Errorf("wasm: activate returned error code %d", res[0])
+	}
+
+	return nil
+}
+
+// NewFactory returns a loader.Factory that yields a WASMComponent.
+func NewFactory(engine *Engine, wasmBytes []byte, opts ...ComponentOption) loader.Factory {
+	return func(payload any) (runtime.Component, error) {
+		return NewComponent(context.Background(), engine, wasmBytes, opts...)
+	}
+}
