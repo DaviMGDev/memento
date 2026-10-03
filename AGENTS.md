@@ -73,6 +73,10 @@ Omit the scope for repo-wide changes, as in `docs: add the README quickstart` or
 - **Atomicity**: one logical change and one type per commit. Do not mix unrelated features, fixes, tests, and documentation; if the description needs "and", split the commit.
 - **Formatting**: run `gofmt -w` on changed Go files so formatting lands in the functional commit, not a separate commit.
 
+## Issue Guidelines
+
+When opening issues, check the repository templates under `.github/ISSUE_TEMPLATE/` (`feature_request.yml`, `bug_report.yml`) and follow their structure and required fields.
+
 ## Pull Request Guidelines
 
 Pull requests should explain the behavior and rationale, link relevant issues or specification decisions, and include test results (`go vet ./...`, `go test ./... -race`). Use the same Conventional Commit form for the PR title. Include example output or screenshots only when they clarify a user-visible change.
