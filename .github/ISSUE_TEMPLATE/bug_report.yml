@@ -1,0 +1,85 @@
+name: Bug report
+description: Report a divergence between the documented behavior and what the runtime does.
+title: "fix: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for filing a bug. Memento is spec-first: behavior is defined by
+        [`specs/SPEC.md`](https://github.com/DaviMGDev/memento/blob/main/specs/SPEC.md)
+        and the Gherkin features in
+        [`specs/features/`](https://github.com/DaviMGDev/memento/tree/main/specs/features).
+        Linking the applicable section or scenario helps a lot.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: Describe the divergence. If the behavior is specified, quote or link the relevant part of the spec.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Minimal reproduction
+      description: A minimal Go program or test that triggers the behavior.
+      render: go
+      placeholder: |
+        package main
+
+        func main() {
+            // ...
+        }
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      description: What should happen according to the spec?
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: What actually happens? Include the full output.
+    validations:
+      required: true
+  - type: input
+    id: go-version
+    attributes:
+      label: Go version
+      description: Output of `go version`.
+      placeholder: go version go1.23.4 linux/amd64
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: Operating system
+      placeholder: Linux (Ubuntu 24.04, amd64)
+    validations:
+      required: true
+  - type: input
+    id: revision
+    attributes:
+      label: Revision
+      description: Output of `git rev-parse --short HEAD`, or the release version.
+    validations:
+      required: false
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs
+      description: Paste `go test ./... -race` output if it is relevant.
+      render: shell
+    validations:
+      required: false
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before submitting
+      options:
+        - label: I searched existing issues for duplicates.
+          required: true
