@@ -1,0 +1,11 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Behavioral specification
+    url: https://github.com/DaviMGDev/memento/blob/main/specs/SPEC.md
+    about: Read the contract before filing; most behavior questions are answered there.
+  - name: Conformance features
+    url: https://github.com/DaviMGDev/memento/tree/main/specs/features
+    about: The Gherkin scenarios that define the executable contract.
+  - name: Contributing guide
+    url: https://github.com/DaviMGDev/memento/blob/main/CONTRIBUTING.md
+    about: Setup, spec-first workflow, commit conventions, and pull request expectations.

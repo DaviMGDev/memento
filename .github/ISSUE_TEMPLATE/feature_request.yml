@@ -1,0 +1,50 @@
+name: Feature request
+description: Propose a change to the runtime, the loader, or the behavioral contract.
+title: "feat: "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Memento is spec-first. A proposal that changes observable behavior
+        should name the section(s) of
+        [`specs/SPEC.md`](https://github.com/DaviMGDev/memento/blob/main/specs/SPEC.md)
+        it touches and whether a new Gherkin scenario or a Decision (D-number)
+        is warranted.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What can't you express today, and why does it matter?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior
+      description: Describe the behavior you want, not the implementation.
+    validations:
+      required: true
+  - type: textarea
+    id: spec-impact
+    attributes:
+      label: Spec impact
+      description: Which parts of the contract change? New keys, semantics, ordering, or versioning? Is the change additive or breaking?
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Workarounds, other designs, or why the current semantics are insufficient.
+    validations:
+      required: false
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before submitting
+      options:
+        - label: I checked the Non-Goals section of `specs/SPEC.md`.
+          required: true
+        - label: I searched existing issues for duplicates.
+          required: true
