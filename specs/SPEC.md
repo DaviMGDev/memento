@@ -19,7 +19,7 @@ Modern systems compose at runtime: plugin hosts, multi-tenant servers, and self-
 - **Temporal composability** — removing a component completely reverts the effects it installed on the shared environment.
 - **Spatial composability** — components declare their dependencies and the runtime resolves, provides, and withdraws them reactively, activating and deactivating components as availability changes.
 
-The paradigm this project implements reifies both guarantees as runtime mechanisms: every context mutation carries an inverse the runtime accumulates (revertible effects), and every context change is classified against each component's dependency specification to drive its lifecycle (reactive coeffects). The formal foundation is "A Programming Paradigm for Spatiotemporal Composability" (Shi, Zhang, Cui, 2026); Cordis is its reference implementation in TypeScript.
+The paradigm this project implements reifies both guarantees as runtime mechanisms: every context mutation carries an inverse the runtime accumulates (revertible effects), and every context change is classified against each component's dependency specification to drive its lifecycle (reactive coeffects). The formal foundation is ["A Programming Paradigm for Spatiotemporal Composability" (Shi, Zhang, Cui, 2026)](https://arxiv.org/abs/2608.25512); Cordis is its reference implementation in TypeScript.
 
 This project is an independent Go implementation of the same paradigm, not a Cordis port:
 
