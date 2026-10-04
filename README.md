@@ -49,4 +49,12 @@ That runs the unit suites, all 31 Gherkin scenarios via Godog, and the property 
 
 v1 is instance-level dynamic composition. Code hot replacement, transparent Proxy-style access, cross-process composition, sandboxing, value-level reactivity, and realm tables are explicit non-goals — see [`specs/SPEC.md`](specs/SPEC.md) and its Decisions section.
 
-The paradigm's formal foundation is "A Programming Paradigm for Spatiotemporal Composability" (Shi, Zhang, Cui, 2026); Cordis is its TypeScript reference implementation. This project is an independent Go implementation of the same paradigm, not a Cordis port.
+## Theoretical Foundation
+
+*memento* implements the dynamic composition paradigm formalized by:
+
+> Yifan Shi, Wei Zhang, and Tianyi Cui. **"A Programming Paradigm for Spatiotemporal Composability."** (2026).  
+> arXiv: [`2608.25512 [cs.PL]`](https://arxiv.org/abs/2608.25512)
+
+[Cordis](https://cordis.moe/) serves as the TypeScript reference implementation of this paradigm. *memento* is an independent Go implementation designed for Go's concurrency model and static type system, rather than a direct port.
+
