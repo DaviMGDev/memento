@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"sync"
 	"sync/atomic"
 
@@ -18,8 +19,9 @@ var instanceCounter uint64
 type ComponentOption func(*componentConfig)
 
 type componentConfig struct {
-	keys *KeyRegistry
-	name string
+	keys      *KeyRegistry
+	name      string
+	logWriter io.Writer
 }
 
 // WithKeyRegistry configures a custom KeyRegistry.
@@ -33,6 +35,14 @@ func WithKeyRegistry(keys *KeyRegistry) ComponentOption {
 func WithModuleName(name string) ComponentOption {
 	return func(c *componentConfig) {
 		c.name = name
+	}
+}
+
+// WithLogWriter forwards guest calls to the memento "log" import to w.
+// By default guest log output is discarded.
+func WithLogWriter(w io.Writer) ComponentOption {
+	return func(c *componentConfig) {
+		c.logWriter = w
 	}
 }
 
@@ -182,6 +192,7 @@ func (c *WASMComponent) Activate(inst *runtime.Instance, payload any) error {
 		payloadBytes: payloadBytes,
 		mod:          mod,
 		modMu:        &modMu,
+		logWriter:    c.cfg.logWriter,
 	}
 	execCtx := withExecState(ctx, st)
 
