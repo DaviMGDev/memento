@@ -3,6 +3,7 @@ package wasm
 import (
 	"context"
 	"fmt"
+	"io"
 	"sync"
 
 	mcontext "github.com/DaviMGDev/memento/context"
@@ -23,6 +24,7 @@ type execState struct {
 	provided     []string
 	mod          api.Module
 	modMu        *sync.Mutex
+	logWriter    io.Writer
 }
 
 type execCtxKey struct{}
@@ -154,6 +156,10 @@ func hostRegisterEffect(ctx context.Context, m api.Module, effectID uint32) uint
 
 	mod := s.mod
 	modMu := s.modMu
+	// The inverse runs after activation returns; carry the exec context so
+	// host imports invoked from memento_revert_effect (e.g. log) still see
+	// the module's execState.
+	execCtx := ctx
 	// Register effect on fiber context with inverse callback.
 	err := targetCtx.RegisterEffect(func() (func() error, error) {
 		inverse := func() error {
@@ -165,7 +171,7 @@ func hostRegisterEffect(ctx context.Context, m api.Module, effectID uint32) uint
 			if revertFn == nil {
 				return nil
 			}
-			res, err := revertFn.Call(context.Background(), uint64(effectID))
+			res, err := revertFn.Call(execCtx, uint64(effectID))
 			if err != nil {
 				return fmt.Errorf("wasm revert effect %d failed: %w", effectID, err)
 			}
@@ -182,8 +188,17 @@ func hostRegisterEffect(ctx context.Context, m api.Module, effectID uint32) uint
 	return 0
 }
 
+// hostLog forwards guest log output to the execState log writer, when one
+// is configured. Logging is best-effort: errors are silently ignored.
 func hostLog(ctx context.Context, m api.Module, ptr, length uint32) uint32 {
-	// Debug logging hook; errors silently ignored.
-	_, _ = readString(m, ptr, length)
+	s := getExecState(ctx)
+	if s == nil || s.logWriter == nil {
+		return 0
+	}
+	str, err := readString(m, ptr, length)
+	if err != nil {
+		return 0
+	}
+	_, _ = io.WriteString(s.logWriter, str)
 	return 0
 }

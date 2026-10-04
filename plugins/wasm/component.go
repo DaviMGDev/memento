@@ -4,12 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"sync"
 	"sync/atomic"
 
 	"github.com/DaviMGDev/memento/loader"
 	"github.com/DaviMGDev/memento/runtime"
 	"github.com/tetratelabs/wazero"
+	"github.com/tetratelabs/wazero/api"
 )
 
 var instanceCounter uint64
@@ -18,8 +20,12 @@ var instanceCounter uint64
 type ComponentOption func(*componentConfig)
 
 type componentConfig struct {
-	keys *KeyRegistry
-	name string
+	keys      *KeyRegistry
+	name      string
+	logWriter io.Writer
+	stdin     io.Reader
+	stdout    io.Writer
+	stderr    io.Writer
 }
 
 // WithKeyRegistry configures a custom KeyRegistry.
@@ -33,6 +39,37 @@ func WithKeyRegistry(keys *KeyRegistry) ComponentOption {
 func WithModuleName(name string) ComponentOption {
 	return func(c *componentConfig) {
 		c.name = name
+	}
+}
+
+// WithLogWriter forwards guest calls to the memento "log" import to w.
+// By default guest log output is discarded.
+func WithLogWriter(w io.Writer) ComponentOption {
+	return func(c *componentConfig) {
+		c.logWriter = w
+	}
+}
+
+// WithStdin wires r to the guest's WASI standard input (fd 0). Guests that
+// read stdin — interactive REPLs, for instance — block their activation
+// until the reader is exhausted.
+func WithStdin(r io.Reader) ComponentOption {
+	return func(c *componentConfig) {
+		c.stdin = r
+	}
+}
+
+// WithStdout wires w to the guest's WASI standard output (fd 1).
+func WithStdout(w io.Writer) ComponentOption {
+	return func(c *componentConfig) {
+		c.stdout = w
+	}
+}
+
+// WithStderr wires w to the guest's WASI standard error (fd 2).
+func WithStderr(w io.Writer) ComponentOption {
+	return func(c *componentConfig) {
+		c.stderr = w
 	}
 }
 
@@ -101,6 +138,10 @@ func probeDeclarations(ctx context.Context, r wazero.Runtime, compiled wazero.Co
 	}
 	defer mod.Close(ctx)
 
+	if err := initializeReactors(ctx, mod); err != nil {
+		return runtime.Declarations{}, err
+	}
+
 	declFn := mod.ExportedFunction("memento_declare")
 	if declFn == nil {
 		return runtime.Declarations{}, nil
@@ -153,9 +194,13 @@ func (c *WASMComponent) Activate(inst *runtime.Instance, payload any) error {
 	instID := atomic.AddUint64(&instanceCounter, 1)
 	modName := fmt.Sprintf("%s_%d_%d", c.cfg.name, inst.FiberID(), instID)
 
-	mod, err := c.engine.runtime.InstantiateModule(ctx, c.compiled, wazero.NewModuleConfig().WithName(modName))
+	mod, err := c.engine.runtime.InstantiateModule(ctx, c.compiled, c.moduleConfig(modName))
 	if err != nil {
 		return fmt.Errorf("wasm: instantiating module instance: %w", err)
+	}
+	if err := initializeReactors(ctx, mod); err != nil {
+		_ = mod.Close(ctx)
+		return err
 	}
 
 	var modMu sync.Mutex
@@ -182,6 +227,7 @@ func (c *WASMComponent) Activate(inst *runtime.Instance, payload any) error {
 		payloadBytes: payloadBytes,
 		mod:          mod,
 		modMu:        &modMu,
+		logWriter:    c.cfg.logWriter,
 	}
 	execCtx := withExecState(ctx, st)
 
@@ -204,4 +250,38 @@ func NewFactory(engine *Engine, wasmBytes []byte, opts ...ComponentOption) loade
 	return func(payload any) (runtime.Component, error) {
 		return NewComponent(context.Background(), engine, wasmBytes, opts...)
 	}
+}
+
+// moduleConfig builds the wazero module configuration for one instance,
+// wiring the configured stdio streams when present.
+func (c *WASMComponent) moduleConfig(name string) wazero.ModuleConfig {
+	cfg := wazero.NewModuleConfig().WithName(name)
+	if c.cfg.stdin != nil {
+		cfg = cfg.WithStdin(c.cfg.stdin)
+	}
+	if c.cfg.stdout != nil {
+		cfg = cfg.WithStdout(c.cfg.stdout)
+	}
+	if c.cfg.stderr != nil {
+		cfg = cfg.WithStderr(c.cfg.stderr)
+	}
+	return cfg
+}
+
+// initializeReactors runs the reactor initialization export of WASI-based
+// guests when present: wasi-libc uses "_initialize" while Go's c-shared
+// wasip1 runtime uses "_rt0_wasm_wasip1_lib". Core wasm guests — with
+// neither export — are left untouched.
+func initializeReactors(ctx context.Context, mod api.Module) error {
+	fn := mod.ExportedFunction("_initialize")
+	if fn == nil {
+		fn = mod.ExportedFunction("_rt0_wasm_wasip1_lib")
+	}
+	if fn == nil {
+		return nil
+	}
+	if _, err := fn.Call(ctx); err != nil {
+		return fmt.Errorf("wasm: initializing reactor module: %w", err)
+	}
+	return nil
 }
