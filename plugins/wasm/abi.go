@@ -154,6 +154,10 @@ func hostRegisterEffect(ctx context.Context, m api.Module, effectID uint32) uint
 
 	mod := s.mod
 	modMu := s.modMu
+	// The inverse runs after activation returns; carry the exec context so
+	// host imports invoked from memento_revert_effect (e.g. log) still see
+	// the module's execState.
+	execCtx := ctx
 	// Register effect on fiber context with inverse callback.
 	err := targetCtx.RegisterEffect(func() (func() error, error) {
 		inverse := func() error {
@@ -165,7 +169,7 @@ func hostRegisterEffect(ctx context.Context, m api.Module, effectID uint32) uint
 			if revertFn == nil {
 				return nil
 			}
-			res, err := revertFn.Call(context.Background(), uint64(effectID))
+			res, err := revertFn.Call(execCtx, uint64(effectID))
 			if err != nil {
 				return fmt.Errorf("wasm revert effect %d failed: %w", effectID, err)
 			}
