@@ -11,6 +11,7 @@ import (
 	"github.com/DaviMGDev/memento/loader"
 	"github.com/DaviMGDev/memento/runtime"
 	"github.com/tetratelabs/wazero"
+	"github.com/tetratelabs/wazero/api"
 )
 
 var instanceCounter uint64
@@ -111,6 +112,10 @@ func probeDeclarations(ctx context.Context, r wazero.Runtime, compiled wazero.Co
 	}
 	defer mod.Close(ctx)
 
+	if err := initializeReactors(ctx, mod); err != nil {
+		return runtime.Declarations{}, err
+	}
+
 	declFn := mod.ExportedFunction("memento_declare")
 	if declFn == nil {
 		return runtime.Declarations{}, nil
@@ -167,6 +172,10 @@ func (c *WASMComponent) Activate(inst *runtime.Instance, payload any) error {
 	if err != nil {
 		return fmt.Errorf("wasm: instantiating module instance: %w", err)
 	}
+	if err := initializeReactors(ctx, mod); err != nil {
+		_ = mod.Close(ctx)
+		return err
+	}
 
 	var modMu sync.Mutex
 
@@ -215,4 +224,22 @@ func NewFactory(engine *Engine, wasmBytes []byte, opts ...ComponentOption) loade
 	return func(payload any) (runtime.Component, error) {
 		return NewComponent(context.Background(), engine, wasmBytes, opts...)
 	}
+}
+
+// initializeReactors runs the reactor initialization export of WASI-based
+// guests when present: wasi-libc uses "_initialize" while Go's c-shared
+// wasip1 runtime uses "_rt0_wasm_wasip1_lib". Core wasm guests — with
+// neither export — are left untouched.
+func initializeReactors(ctx context.Context, mod api.Module) error {
+	fn := mod.ExportedFunction("_initialize")
+	if fn == nil {
+		fn = mod.ExportedFunction("_rt0_wasm_wasip1_lib")
+	}
+	if fn == nil {
+		return nil
+	}
+	if _, err := fn.Call(ctx); err != nil {
+		return fmt.Errorf("wasm: initializing reactor module: %w", err)
+	}
+	return nil
 }

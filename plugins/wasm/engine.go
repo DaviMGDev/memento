@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/tetratelabs/wazero"
+	"github.com/tetratelabs/wazero/imports/wasi_snapshot_preview1"
 )
 
 // Engine wraps the wazero runtime for executing WASM plugin modules.
@@ -13,11 +14,19 @@ type Engine struct {
 }
 
 // NewEngine creates a new WASM execution engine with default configuration.
+//
+// The WASI snapshot preview 1 host module is instantiated so guests built for
+// wasi (notably Go's wasip1 port) can be loaded; core wasm guests that never
+// import WASI are unaffected.
 func NewEngine(ctx context.Context) (*Engine, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	r := wazero.NewRuntime(ctx)
+	if _, err := wasi_snapshot_preview1.Instantiate(ctx, r); err != nil {
+		_ = r.Close(ctx)
+		return nil, fmt.Errorf("wasm: instantiating WASI: %w", err)
+	}
 	if err := RegisterHostModule(ctx, r); err != nil {
 		_ = r.Close(ctx)
 		return nil, fmt.Errorf("wasm: registering host module: %w", err)
