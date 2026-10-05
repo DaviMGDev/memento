@@ -24,3 +24,14 @@ updated: "2026-10-05"
   `invoke_test.go`). The `echo` and `chat` examples now bind their provides;
   `go vet ./...` and `go test ./... -race` are green. Status moved to
   implemented.
+- Added the host-mediated HTTP transport (D8-D9): `http_request`,
+  `http_response_len`, and `http_response` on the loader's host module, with an
+  `Engine`-owned `Egress` policy (`WithHTTPAllowHosts`, `WithHTTPTimeout`,
+  `WithHTTPTransport`). The response is stashed rather than caller-buffered, so
+  a short read never repeats the request; declaration probes carry no egress,
+  keeping declarations pure. Covered by `transport_test.go` and
+  `features/transport.feature`.
+- Added host-side credential references (D10): header values carry `env:NAME`
+  and the host resolves them through `WithHTTPCredentialResolver`, so a guest
+  authenticates without holding a secret and an unavailable reference fails
+  the exchange.
