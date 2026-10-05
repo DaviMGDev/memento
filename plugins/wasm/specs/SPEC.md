@@ -3,7 +3,7 @@ type: spec
 title: "WASM Component Loader — Specification"
 description: "Runs capability code as WebAssembly guests on wazero: declarations, paper-faithful registration, value reads, and invocation, wired to the kernel's effects and coeffects."
 tags: [spec, plugin]
-sections: [context, abi, semantics, invocation, lifecycle, conformance, non-goals, decisions]
+sections: [context, abi, semantics, invocation, transport, lifecycle, conformance, non-goals, decisions]
 created: "2026-10-05"
 updated: "2026-10-05"
 ---
@@ -77,6 +77,9 @@ Host imports:
 | `memento.get_len` | `(i32,i32) -> i32` | length of the value resolved for `key` |
 | `memento.get` | `(i32,i32,i32,i32) -> i32` | copy the value resolved for `key` |
 | `memento.invoke` | `(i32,i32,i32,i32,i32,i32) -> i32` | invoke an operation of the value at `key` |
+| `memento.http_request` | `(i32,i32) -> i32` | perform one HTTP exchange for a JSON request document |
+| `memento.http_response_len` | `() -> i32` | length of the stashed response document |
+| `memento.http_response` | `(i32,i32) -> i32` | copy the stashed response document |
 | `memento.get_payload_len` | `() -> i32` | length of the activation payload |
 | `memento.get_payload` | `(i32,i32) -> i32` | copy the activation payload |
 | `memento.register_effect` | `(i32) -> i32` | register an opaque effect id whose inverse is `memento_revert_effect` |
@@ -142,6 +145,38 @@ value bound at a key is the capability, and `memento_handle` implements the
 operations that act on it. Values remain plain bytes; live Go values are not
 crossed.
 
+## Transport
+
+Guests reach the network only through the host. A guest writes a JSON request
+document `{method, url, headers, body}` into its memory and calls
+`memento.http_request`; the host performs one exchange under its egress policy
+and stashes a JSON response document `{status, headers, body}` that the guest
+reads back with `memento.http_response_len` and `memento.http_response`. The
+call returns `0` on a completed exchange — any status, including an error
+status — and non-zero on a policy or transport failure. Bodies are text; binary
+payloads are out of scope for this ABI.
+
+`http_request` takes the request alone: the response is stashed on the instance
+rather than written into a caller buffer, so a body larger than the guest
+anticipated costs a second read, never a second request. A later `http_request`
+replaces the stash. Timeouts, allow-lists, and the transport itself are the
+host's: the `Engine` carries an `Egress` policy whose zero value is permissive
+(any host, a default timeout, `net/http`), and hosts constrain it with
+`WithHTTPAllowHosts`, `WithHTTPTimeout`, and `WithHTTPTransport`. A failure is
+non-fatal to the guest: the code returns and a diagnostic line is written to
+the configured log writer.
+
+A header value may carry a credential reference — `env:NAME`, optionally
+embedded, as in `Bearer env:OPENAI_API_KEY`. When the host configures a
+credential resolver (`WithHTTPCredentialResolver`), the host substitutes the
+secret before the request leaves; an unavailable reference fails the exchange
+rather than crossing the wire literally. Without a resolver, values pass
+through unchanged. The guest therefore holds a reference and never a secret.
+
+Reads require an active instance. Declaration runs on a probe with no egress,
+so a request from `memento_declare` fails: declarations describe the component,
+they do not act.
+
 ## Lifecycle
 
 One module instance per activation. The host instantiates the compiled module,
@@ -162,7 +197,9 @@ Executable conformance lives in the package's own test suite
 
 ## Non-Goals
 
-- Network access: no HTTP import here; transport is a separate proposal.
+- Transport policy beyond one exchange: credential resolution, proxies,
+  retries, redirects, streaming, and binary bodies are the caller's concern;
+  the host performs one request and returns one response.
 - Isolation or sandboxing of guests: guests run with the host's authority.
 - Hot replacement of running instances, transparent proxy access to guest
   memory, value-level reactivity, and cross-process composition.
@@ -188,3 +225,16 @@ Executable conformance lives in the package's own test suite
   and never invokes still works as before (except D2, which is the point).
 - **D7 — Isolated specification.** This spec and its features are the plugin's
   contract; the loader never reaches into or edits the root specs.
+- **D8 — Transport is host-mediated.** Guests reach the network only through
+  `http_request`; the host performs the exchange, owns the egress policy, and
+  reports policy and transport failures as non-zero codes. A guest never holds
+  a socket.
+- **D9 — The response is stashed, not buffered by the caller.** `http_request`
+  takes the request alone, and the response is read back with the
+  `http_response_len`/`http_response` pair, mirroring
+  `get_payload_len`/`get_payload`; a short read retries the copy, never the
+  request.
+- **D10 — Credentials are host-substituted references.** Request header values
+  carry `env:NAME` references; the host resolves them through its configured
+  resolver, and an unavailable reference fails the exchange. Secrets never
+  enter guest memory, and the kernel stays free of a particular secret store.

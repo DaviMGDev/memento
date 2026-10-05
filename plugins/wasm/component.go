@@ -214,6 +214,7 @@ func (c *WASMComponent) Activate(inst *runtime.Instance, payload any) error {
 		keys:         c.keys,
 		decls:        c.decls,
 		bindings:     c.engine.bindings,
+		egress:       c.engine.egress,
 	}
 
 	// Push module cleanup as the bottom-most effect so it closes after all guest inverses run.
