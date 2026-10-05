@@ -29,6 +29,8 @@ type execState struct {
 	decls        runtime.Declarations
 	bindings     *bindingTable
 	bound        []mcontext.KeyID
+	egress       Egress
+	httpResp     []byte
 }
 
 type execCtxKey struct{}
@@ -77,6 +79,15 @@ func RegisterHostModule(ctx context.Context, r wazero.Runtime) error {
 		NewFunctionBuilder().
 		WithFunc(hostRegisterEffect).
 		Export("register_effect").
+		NewFunctionBuilder().
+		WithFunc(hostHTTPRequest).
+		Export("http_request").
+		NewFunctionBuilder().
+		WithFunc(hostHTTPResponseLen).
+		Export("http_response_len").
+		NewFunctionBuilder().
+		WithFunc(hostHTTPResponse).
+		Export("http_response").
 		NewFunctionBuilder().
 		WithFunc(hostLog).
 		Export("log").
