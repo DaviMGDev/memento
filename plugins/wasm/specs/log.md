@@ -18,3 +18,9 @@ updated: "2026-10-05"
   the committed view; `invoke` as host-mediated routing to the provider's
   `memento_alloc`/`memento_handle`; declared provides must be bound or activation fails.
   References: arXiv:2608.25512 §3.2 (Def. 23-26, eq. 22-23).
+- Implemented the extended ABI — `bind`/`get`/`invoke` in `plugins/wasm`, with
+  `memento_alloc`/`memento_handle` routing, activation failure for unbound
+  declared provides, and hand-built module tests (`bindings_test.go`,
+  `invoke_test.go`). The `echo` and `chat` examples now bind their provides;
+  `go vet ./...` and `go test ./... -race` are green. Status moved to
+  implemented.
