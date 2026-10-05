@@ -205,11 +205,23 @@ func (c *WASMComponent) Activate(inst *runtime.Instance, payload any) error {
 
 	var modMu sync.Mutex
 
+	st := &execState{
+		instance:     inst,
+		payloadBytes: payloadBytes,
+		mod:          mod,
+		modMu:        &modMu,
+		logWriter:    c.cfg.logWriter,
+		keys:         c.keys,
+		decls:        c.decls,
+		bindings:     c.engine.bindings,
+	}
+
 	// Push module cleanup as the bottom-most effect so it closes after all guest inverses run.
 	if err := inst.Context().RegisterEffect(func() (func() error, error) {
 		return func() error {
 			modMu.Lock()
 			defer modMu.Unlock()
+			c.engine.bindings.forget(st)
 			return mod.Close(context.Background())
 		}, nil
 	}); err != nil {
@@ -217,29 +229,24 @@ func (c *WASMComponent) Activate(inst *runtime.Instance, payload any) error {
 		return fmt.Errorf("wasm: registering cleanup effect: %w", err)
 	}
 
-	actFn := mod.ExportedFunction("memento_activate")
-	if actFn == nil {
-		return nil
+	if actFn := mod.ExportedFunction("memento_activate"); actFn != nil {
+		execCtx := withExecState(ctx, st)
+		modMu.Lock()
+		res, err := actFn.Call(execCtx)
+		modMu.Unlock()
+		if err != nil {
+			return fmt.Errorf("wasm: activate invocation failed: %w", err)
+		}
+		if len(res) > 0 && res[0] != 0 {
+			return fmt.Errorf("wasm: activate returned error code %d", res[0])
+		}
 	}
 
-	st := &execState{
-		instance:     inst,
-		payloadBytes: payloadBytes,
-		mod:          mod,
-		modMu:        &modMu,
-		logWriter:    c.cfg.logWriter,
-	}
-	execCtx := withExecState(ctx, st)
-
-	modMu.Lock()
-	res, err := actFn.Call(execCtx)
-	modMu.Unlock()
-
-	if err != nil {
-		return fmt.Errorf("wasm: activate invocation failed: %w", err)
-	}
-	if len(res) > 0 && res[0] != 0 {
-		return fmt.Errorf("wasm: activate returned error code %d", res[0])
+	// Declaring a provide is a promise: activation must register it.
+	for _, k := range c.decls.Provide {
+		if owner, ok := inst.Context().LookupOwner(k.ID()); !ok || owner != inst.FiberID() {
+			return fmt.Errorf("wasm: component %s declared provide %q but did not bind it", c.cfg.name, k.Name())
+		}
 	}
 
 	return nil

@@ -10,7 +10,8 @@ import (
 
 // Engine wraps the wazero runtime for executing WASM plugin modules.
 type Engine struct {
-	runtime wazero.Runtime
+	runtime  wazero.Runtime
+	bindings *bindingTable
 }
 
 // NewEngine creates a new WASM execution engine with default configuration.
@@ -31,7 +32,7 @@ func NewEngine(ctx context.Context) (*Engine, error) {
 		_ = r.Close(ctx)
 		return nil, fmt.Errorf("wasm: registering host module: %w", err)
 	}
-	return &Engine{runtime: r}, nil
+	return &Engine{runtime: r, bindings: newBindingTable()}, nil
 }
 
 // Close releases resources associated with the WASM runtime.

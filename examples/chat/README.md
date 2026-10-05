@@ -1,10 +1,11 @@
 # chat — a Go→wasm echo REPL
 
 An interactive echo chat guest written in Go and compiled to WebAssembly
-with Go's `wasip1` port. It provides the context key `chat`, registers an
-effect on activation, then hosts a chat loop: lines arrive on WASI stdin and
-are echoed back through the memento `log` import. `:quit` (or Ctrl-D) ends
-the session, and unload runs the effect inverse.
+with Go's `wasip1` port. It provides the context key `chat` and binds the
+nickname as its value on activation, registers an effect on activation, then
+hosts a chat loop: lines arrive on WASI stdin and are echoed back through the
+memento `log` import. `:quit` (or Ctrl-D) ends the session, and unload runs
+the effect inverse.
 
 ## Try it
 

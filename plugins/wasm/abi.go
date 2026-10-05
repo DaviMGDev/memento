@@ -25,6 +25,10 @@ type execState struct {
 	mod          api.Module
 	modMu        *sync.Mutex
 	logWriter    io.Writer
+	keys         *KeyRegistry
+	decls        runtime.Declarations
+	bindings     *bindingTable
+	bound        []mcontext.KeyID
 }
 
 type execCtxKey struct{}
@@ -52,6 +56,18 @@ func RegisterHostModule(ctx context.Context, r wazero.Runtime) error {
 		NewFunctionBuilder().
 		WithFunc(hostDeclareProvide).
 		Export("declare_provide").
+		NewFunctionBuilder().
+		WithFunc(hostBind).
+		Export("bind").
+		NewFunctionBuilder().
+		WithFunc(hostGetLen).
+		Export("get_len").
+		NewFunctionBuilder().
+		WithFunc(hostGet).
+		Export("get").
+		NewFunctionBuilder().
+		WithFunc(hostInvoke).
+		Export("invoke").
 		NewFunctionBuilder().
 		WithFunc(hostGetPayloadLen).
 		Export("get_payload_len").
@@ -201,4 +217,210 @@ func hostLog(ctx context.Context, m api.Module, ptr, length uint32) uint32 {
 	}
 	_, _ = io.WriteString(s.logWriter, str)
 	return 0
+}
+
+// hostBind registers the value of a declared provided key on the calling
+// fiber. The kernel's Bind installs it as a revertible effect, so unloading
+// withdraws the registration with the rest of the fiber's effects.
+func hostBind(ctx context.Context, m api.Module, keyPtr, keyLen, valPtr, valLen uint32) uint32 {
+	s := getExecState(ctx)
+	if s == nil || s.instance == nil {
+		return 1
+	}
+	name, err := readString(m, keyPtr, keyLen)
+	if err != nil {
+		return 1
+	}
+	key, ok := s.lookupKey(name)
+	if !ok || !declaresKey(s.decls.Provide, key.ID()) {
+		return 1
+	}
+	value, err := readBytes(m, valPtr, valLen)
+	if err != nil {
+		return 1
+	}
+	if err := runtime.Bind(s.instance, key, any(value)); err != nil {
+		return 1
+	}
+	s.mu.Lock()
+	s.bound = append(s.bound, key.ID())
+	s.mu.Unlock()
+	s.bindings.set(key.ID(), s)
+	return 0
+}
+
+// hostGetLen returns the length of the value resolved for a declared
+// injected key, or 0 when absent.
+func hostGetLen(ctx context.Context, m api.Module, keyPtr, keyLen uint32) uint32 {
+	value, ok := readValue(ctx, m, keyPtr, keyLen)
+	if !ok {
+		return 0
+	}
+	return uint32(len(value))
+}
+
+// hostGet copies the value resolved for a declared injected key into the
+// caller's buffer, at most bufMax bytes, and returns the count copied.
+func hostGet(ctx context.Context, m api.Module, keyPtr, keyLen, bufPtr, bufMax uint32) uint32 {
+	value, ok := readValue(ctx, m, keyPtr, keyLen)
+	if !ok {
+		return 0
+	}
+	if uint32(len(value)) > bufMax {
+		value = value[:bufMax]
+	}
+	mem := m.Memory()
+	if mem == nil || !mem.Write(bufPtr, value) {
+		return 0
+	}
+	return uint32(len(value))
+}
+
+// hostInvoke routes one request to the module that registered the value at a
+// declared injected key and returns the response length. The exchange runs
+// entirely in the provider's memory: the host allocates request and response
+// buffers through the provider's memento_alloc, copies the request in, calls
+// memento_handle, and copies the response back into the caller's buffer.
+func hostInvoke(ctx context.Context, m api.Module, keyPtr, keyLen, reqPtr, reqLen, respPtr, respMax uint32) uint32 {
+	caller := getExecState(ctx)
+	if caller == nil || caller.instance == nil {
+		return 0
+	}
+	name, err := readString(m, keyPtr, keyLen)
+	if err != nil {
+		return 0
+	}
+	key, ok := caller.lookupKey(name)
+	if !ok || !declaresKey(caller.decls.Inject, key.ID()) {
+		return 0
+	}
+	provider, ok := caller.bindings.get(key.ID())
+	if !ok || provider == nil || provider.mod == nil {
+		return 0
+	}
+	req, err := readBytes(m, reqPtr, reqLen)
+	if err != nil {
+		return 0
+	}
+
+	// Serialize with the provider's own activation, teardown, and handlers;
+	// the kernel's acyclicity makes the lock order a DAG, so no deadlock.
+	provider.modMu.Lock()
+	defer provider.modMu.Unlock()
+
+	alloc := provider.mod.ExportedFunction("memento_alloc")
+	handle := provider.mod.ExportedFunction("memento_handle")
+	mem := provider.mod.Memory()
+	if alloc == nil || handle == nil || mem == nil {
+		return 0
+	}
+
+	execCtx := withExecState(ctx, provider)
+	reqHostPtr, ok := allocBuffer(execCtx, alloc, reqLen)
+	if !ok {
+		return 0
+	}
+	if len(req) > 0 && !mem.Write(reqHostPtr, req) {
+		return 0
+	}
+	respHostPtr, ok := allocBuffer(execCtx, alloc, respMax)
+	if !ok {
+		return 0
+	}
+
+	res, err := handle.Call(execCtx, uint64(reqHostPtr), uint64(reqLen), uint64(respHostPtr), uint64(respMax))
+	if err != nil || len(res) == 0 {
+		return 0
+	}
+	n := uint32(res[0])
+	if n == 0 || n > respMax {
+		return 0
+	}
+	resp, ok := mem.Read(respHostPtr, n)
+	if !ok {
+		return 0
+	}
+	if !m.Memory().Write(respPtr, resp) {
+		return 0
+	}
+	return n
+}
+
+// allocBuffer asks a provider module for a buffer of at least size bytes.
+func allocBuffer(ctx context.Context, alloc api.Function, size uint32) (uint32, bool) {
+	res, err := alloc.Call(ctx, uint64(size))
+	if err != nil || len(res) == 0 || res[0] == 0 {
+		return 0, false
+	}
+	return uint32(res[0]), true
+}
+
+// readValue resolves the bytes bound at a declared injected key through the
+// calling instance's committed view.
+func readValue(ctx context.Context, m api.Module, keyPtr, keyLen uint32) ([]byte, bool) {
+	s := getExecState(ctx)
+	if s == nil || s.instance == nil {
+		return nil, false
+	}
+	name, err := readString(m, keyPtr, keyLen)
+	if err != nil {
+		return nil, false
+	}
+	key, ok := s.lookupKey(name)
+	if !ok || !declaresKey(s.decls.Inject, key.ID()) {
+		return nil, false
+	}
+	v, ok := runtime.Get(s.instance, key)
+	if !ok {
+		return nil, false
+	}
+	switch b := v.(type) {
+	case []byte:
+		return b, true
+	case string:
+		return []byte(b), true
+	default:
+		return nil, false
+	}
+}
+
+// lookupKey resolves a guest-visible key name through the state's registry.
+// The ABI value surface requires the registry's default Key[any]; a custom
+// typed key cannot carry bytes and is reported as absent.
+func (s *execState) lookupKey(name string) (mcontext.Key[any], bool) {
+	if s.keys == nil {
+		return mcontext.Key[any]{}, false
+	}
+	k, ok := s.keys.Get(name)
+	if !ok {
+		return mcontext.Key[any]{}, false
+	}
+	typed, ok := k.(mcontext.Key[any])
+	return typed, ok
+}
+
+// declaresKey reports whether id is in a declaration set.
+func declaresKey(keys []mcontext.AnyKey, id mcontext.KeyID) bool {
+	for _, k := range keys {
+		if k.ID() == id {
+			return true
+		}
+	}
+	return false
+}
+
+// readBytes copies length bytes of module memory, tolerating zero length.
+func readBytes(m api.Module, ptr, length uint32) ([]byte, error) {
+	mem := m.Memory()
+	if mem == nil {
+		return nil, fmt.Errorf("module memory not exported")
+	}
+	if length == 0 {
+		return nil, nil
+	}
+	buf, ok := mem.Read(ptr, length)
+	if !ok {
+		return nil, fmt.Errorf("memory read out of bounds at offset %d, len %d", ptr, length)
+	}
+	return append([]byte(nil), buf...), nil
 }
