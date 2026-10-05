@@ -1,7 +1,8 @@
 // Echo plugin for the memento WASM loader.
 //
 // Builds to a freestanding core WebAssembly module that:
-//   * declares that it provides the context key "echo",
+//   * declares that it provides the context key "echo" and binds the
+//     payload as its value on activation,
 //   * on activation, reads its configuration payload through the memento
 //     host ABI and echoes it back to the host log,
 //   * registers an effect whose inverse (memento_revert_effect) echoes a
@@ -14,6 +15,7 @@
 
 MEMENTO_IMPORT("declare_inject") extern uint32_t declare_inject(const char *ptr, uint32_t len);
 MEMENTO_IMPORT("declare_provide") extern uint32_t declare_provide(const char *ptr, uint32_t len);
+MEMENTO_IMPORT("bind") extern uint32_t bind(const char *key, uint32_t key_len, const char *val, uint32_t val_len);
 MEMENTO_IMPORT("get_payload_len") extern uint32_t get_payload_len(void);
 MEMENTO_IMPORT("get_payload") extern uint32_t get_payload(char *buf, uint32_t max);
 MEMENTO_IMPORT("register_effect") extern uint32_t register_effect(uint32_t id);
@@ -48,18 +50,24 @@ uint32_t memento_declare(void) {
 	return declare_provide(key, (uint32_t)sizeof(key) - 1) == 0 ? 0 : 1;
 }
 
-// memento_activate: read the payload and echo it, then install the effect
-// whose inverse the loader will call on unload.
+// memento_activate: read the payload, register the provided key with the
+// payload as its value, echo the payload, then install the effect whose
+// inverse the loader will call on unload.
 MEMENTO_EXPORT("memento_activate")
 uint32_t memento_activate(void) {
+	static const char key[] = "echo";
 	uint32_t want = get_payload_len();
 	if (want > PAYLOAD_CAP)
 		want = PAYLOAD_CAP;
 	uint32_t got = get_payload(payload, want);
-	if (echo_log(payload, got) != 0)
+	// A declared provide must be bound during activation; the payload is
+	// what dependents would receive as the value of "echo".
+	if (bind(key, (uint32_t)sizeof(key) - 1, payload, got) != 0)
 		return 1;
-	if (register_effect(ECHO_EFFECT_ID) != 0)
+	if (echo_log(payload, got) != 0)
 		return 2;
+	if (register_effect(ECHO_EFFECT_ID) != 0)
+		return 3;
 	return 0;
 }
 

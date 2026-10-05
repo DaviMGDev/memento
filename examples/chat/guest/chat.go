@@ -21,6 +21,9 @@ const (
 //go:wasmimport memento declare_provide
 func declareProvide(ptr unsafe.Pointer, n uint32) int32
 
+//go:wasmimport memento bind
+func bindHost(keyPtr unsafe.Pointer, keyLen uint32, valPtr unsafe.Pointer, valLen uint32) int32
+
 //go:wasmimport memento get_payload_len
 func getPayloadLen() int32
 
@@ -40,6 +43,16 @@ func emit(s string) {
 		return
 	}
 	logMsg(unsafe.Pointer(&b[0]), uint32(len(b)))
+}
+
+// bindProvided registers the provided key's value through the host ABI.
+func bindProvided(key, value string) bool {
+	kb := []byte(key)
+	vb := []byte(value)
+	if len(kb) == 0 || len(vb) == 0 {
+		return false
+	}
+	return bindHost(unsafe.Pointer(&kb[0]), uint32(len(kb)), unsafe.Pointer(&vb[0]), uint32(len(vb))) == 0
 }
 
 // mementoDeclare declares the key this guest provides.
@@ -66,6 +79,11 @@ func mementoActivate() uint32 {
 	nick := readPayload()
 	if nick == "" {
 		nick = "echo"
+	}
+	// A declared provide must be bound during activation; the nickname is
+	// what dependents would receive as the value of "chat".
+	if !bindProvided(providedKey, nick) {
+		return 2
 	}
 	emit("chat: " + nick + " joined (type :quit or press Ctrl-D to leave)\n")
 

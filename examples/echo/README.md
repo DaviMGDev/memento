@@ -1,9 +1,10 @@
 # echo — a minimal WASM plugin
 
 A guest plugin for the [`plugins/wasm`](../../plugins/wasm) loader: it
-declares that it provides the context key `echo`, then on activation reads
-its configuration payload through the memento host ABI and echoes it back to
-the host log. On unload, its effect inverse says goodbye.
+declares that it provides the context key `echo` and binds the payload as its
+value on activation, then reads its configuration payload through the memento
+host ABI and echoes it back to the host log. On unload, its effect inverse
+says goodbye.
 
 ## Try it
 
@@ -67,6 +68,7 @@ ldr.Reconcile(tree)
 | export | `memory` | linear memory |
 | import | `memento.declare_inject` | `(i32, i32) -> i32` |
 | import | `memento.declare_provide` | `(i32, i32) -> i32` |
+| import | `memento.bind` | `(i32, i32, i32, i32) -> i32` |
 | import | `memento.get_payload_len` | `() -> i32` |
 | import | `memento.get_payload` | `(i32, i32) -> i32` |
 | import | `memento.register_effect` | `(i32) -> i32` |
