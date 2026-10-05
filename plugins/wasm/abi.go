@@ -66,6 +66,9 @@ func RegisterHostModule(ctx context.Context, r wazero.Runtime) error {
 		WithFunc(hostGet).
 		Export("get").
 		NewFunctionBuilder().
+		WithFunc(hostInvoke).
+		Export("invoke").
+		NewFunctionBuilder().
 		WithFunc(hostGetPayloadLen).
 		Export("get_payload_len").
 		NewFunctionBuilder().
@@ -271,6 +274,85 @@ func hostGet(ctx context.Context, m api.Module, keyPtr, keyLen, bufPtr, bufMax u
 		return 0
 	}
 	return uint32(len(value))
+}
+
+// hostInvoke routes one request to the module that registered the value at a
+// declared injected key and returns the response length. The exchange runs
+// entirely in the provider's memory: the host allocates request and response
+// buffers through the provider's memento_alloc, copies the request in, calls
+// memento_handle, and copies the response back into the caller's buffer.
+func hostInvoke(ctx context.Context, m api.Module, keyPtr, keyLen, reqPtr, reqLen, respPtr, respMax uint32) uint32 {
+	caller := getExecState(ctx)
+	if caller == nil || caller.instance == nil {
+		return 0
+	}
+	name, err := readString(m, keyPtr, keyLen)
+	if err != nil {
+		return 0
+	}
+	key, ok := caller.lookupKey(name)
+	if !ok || !declaresKey(caller.decls.Inject, key.ID()) {
+		return 0
+	}
+	provider, ok := caller.bindings.get(key.ID())
+	if !ok || provider == nil || provider.mod == nil {
+		return 0
+	}
+	req, err := readBytes(m, reqPtr, reqLen)
+	if err != nil {
+		return 0
+	}
+
+	// Serialize with the provider's own activation, teardown, and handlers;
+	// the kernel's acyclicity makes the lock order a DAG, so no deadlock.
+	provider.modMu.Lock()
+	defer provider.modMu.Unlock()
+
+	alloc := provider.mod.ExportedFunction("memento_alloc")
+	handle := provider.mod.ExportedFunction("memento_handle")
+	mem := provider.mod.Memory()
+	if alloc == nil || handle == nil || mem == nil {
+		return 0
+	}
+
+	execCtx := withExecState(ctx, provider)
+	reqHostPtr, ok := allocBuffer(execCtx, alloc, reqLen)
+	if !ok {
+		return 0
+	}
+	if len(req) > 0 && !mem.Write(reqHostPtr, req) {
+		return 0
+	}
+	respHostPtr, ok := allocBuffer(execCtx, alloc, respMax)
+	if !ok {
+		return 0
+	}
+
+	res, err := handle.Call(execCtx, uint64(reqHostPtr), uint64(reqLen), uint64(respHostPtr), uint64(respMax))
+	if err != nil || len(res) == 0 {
+		return 0
+	}
+	n := uint32(res[0])
+	if n == 0 || n > respMax {
+		return 0
+	}
+	resp, ok := mem.Read(respHostPtr, n)
+	if !ok {
+		return 0
+	}
+	if !m.Memory().Write(respPtr, resp) {
+		return 0
+	}
+	return n
+}
+
+// allocBuffer asks a provider module for a buffer of at least size bytes.
+func allocBuffer(ctx context.Context, alloc api.Function, size uint32) (uint32, bool) {
+	res, err := alloc.Call(ctx, uint64(size))
+	if err != nil || len(res) == 0 || res[0] == 0 {
+		return 0, false
+	}
+	return uint32(res[0]), true
 }
 
 // readValue resolves the bytes bound at a declared injected key through the
