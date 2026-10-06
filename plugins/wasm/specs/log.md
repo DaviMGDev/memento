@@ -10,6 +10,10 @@ updated: "2026-10-06"
 
 ## 2026-10-06
 
+- Added host-side handler invocation (D14): `WASMComponent.Handle` calls a
+  live instance's `memento_alloc`/`memento_handle` under the module lock, with
+  host imports attributed to the instance — the host waker's way to wake a
+  guest. Covered by `handle_test.go`.
 - Implemented the host-services ABI: `HostServices` injected through
   `WithHostServices`, the seven imports wired and registered, cancellation
   gating on status-bearing action imports, and `features/host-services.feature`
