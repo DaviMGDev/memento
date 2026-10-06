@@ -17,6 +17,7 @@ Project status: implemented
 | [SPEC.md](SPEC.md) | WASM Component Loader — Specification | The plugin contract: host ABI, registration, values, invocation, host services, module lifecycle, conformance, non-goals, decisions |
 | [features/abi.feature](features/abi.feature) | WASM host ABI | Conformance scenarios: bind registration, unbound provides, value reads, invocation routing |
 | [features/transport.feature](features/transport.feature) | WASM host HTTP transport | Conformance scenarios: host-performed exchanges, egress policy, timeouts, pure declarations |
+| [features/host-services.feature](features/host-services.feature) | WASM host services | Conformance scenarios: stashed job documents, publish, cancellation poll and code, additive decline |
 | [features/lifecycle.feature](features/lifecycle.feature) | WASM component lifecycle | Conformance scenarios: one instance per activation, reactor initialization, effect reversal |
 | [log.md](log.md) | plugins/wasm/specs/ log | Activity log of spec changes |
 

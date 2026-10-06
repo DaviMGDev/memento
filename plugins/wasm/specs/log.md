@@ -10,6 +10,12 @@ updated: "2026-10-06"
 
 ## 2026-10-06
 
+- Implemented the host-services ABI: `HostServices` injected through
+  `WithHostServices`, the seven imports wired and registered, cancellation
+  gating on status-bearing action imports, and `features/host-services.feature`
+  as the normative scenarios, executed by `services_test.go` (stashed read-back,
+  caller attribution, unset decline, declaration-probe refusal, publish, and
+  cancellation). Refs: core-agent#6.
 - Specified the host-services ABI (D11-D13): `job_start`/`job_peep`/`job_kill`
   route opaque request documents to an injected `HostServices` contract and
   stash one result document (`job_result_len`/`job_result`), so a large result
