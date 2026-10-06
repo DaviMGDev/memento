@@ -651,6 +651,77 @@ func TestCanceledCallFailsHTTPImport(t *testing.T) {
 	}
 }
 
+// buildDeclaringJobGuest builds a guest whose memento_declare attempts a
+// job_start and returns its code, which must be non-zero: declaration runs on
+// a probe with no instance.
+func buildDeclaringJobGuest(request string) []byte {
+	type0 := []byte{0x60, 0x02, 0x7f, 0x7f, 0x01, 0x7f} // (i32,i32)->i32
+	type1 := []byte{0x60, 0x00, 0x01, 0x7f}             // ()->i32
+	type2 := []byte{0x60, 0x01, 0x7f, 0x01, 0x7f}       // (i32)->i32
+	typeSec := encodeSection(1, encodeVec([][]byte{type0, type1, type2}))
+
+	importSec := encodeSection(2, encodeVec([][]byte{
+		httpImport("job_start", 0x00),
+	}))
+
+	// Defined funcs 1..3: declare (type1), activate (type1), revert (type2).
+	funcSec := encodeSection(3, encodeVec([][]byte{{0x01}, {0x01}, {0x02}}))
+	memSec := encodeSection(5, encodeVec([][]byte{{0x00, 0x01}}))
+	exportSec := encodeSection(7, encodeVec([][]byte{
+		append(encodeString("memory"), 0x02, 0x00),
+		append(encodeString("memento_declare"), 0x00, 0x01),
+		append(encodeString("memento_activate"), 0x00, 0x02),
+		append(encodeString("memento_revert_effect"), 0x00, 0x03),
+	}))
+
+	declare := []byte{0x00}
+	declare = append(declare, i32Const(32)...)
+	declare = append(declare, i32Const(int32(len(request)))...)
+	declare = append(declare, 0x10, 0x00) // job_start(32, len)
+	declare = append(declare, 0x0f, 0x0b) // return the import code
+
+	activate := []byte{0x00}
+	activate = append(activate, i32Const(0)...)
+	activate = append(activate, 0x0f, 0x0b)
+	revert := append([]byte{}, activate...)
+
+	codeSec := encodeSection(10, encodeVec([][]byte{
+		append(encodeLEB128U(uint32(len(declare))), declare...),
+		append(encodeLEB128U(uint32(len(activate))), activate...),
+		append(encodeLEB128U(uint32(len(revert))), revert...),
+	}))
+
+	dataSec := encodeSection(11, encodeVec([][]byte{activeData(32, request)}))
+
+	var wasm bytes.Buffer
+	wasm.Write([]byte{0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00})
+	wasm.Write(typeSec)
+	wasm.Write(importSec)
+	wasm.Write(funcSec)
+	wasm.Write(memSec)
+	wasm.Write(exportSec)
+	wasm.Write(codeSec)
+	wasm.Write(dataSec)
+	return wasm.Bytes()
+}
+
+func TestJobImportFailsDuringDeclaration(t *testing.T) {
+	ctx := context.Background()
+	services := &stubServices{startDoc: []byte(`{"job":"j-1"}`)}
+	engine, err := NewEngine(ctx, WithHostServices(services))
+	if err != nil {
+		t.Fatalf("NewEngine: %v", err)
+	}
+	defer engine.Close(ctx)
+
+	if _, err := NewComponent(ctx, engine, buildDeclaringJobGuest(`{"tool":"read"}`)); err == nil {
+		t.Fatal("expected a declaration that starts a job to fail")
+	}
+	if string(services.startReq) != "" {
+		t.Fatal("a declaration probe should never reach the job service")
+	}
+}
+
 func TestPublishReachesHostServices(t *testing.T) {
 	t.Run("delivered", func(t *testing.T) {
 		services := &stubServices{}
