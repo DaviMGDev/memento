@@ -14,6 +14,7 @@ type Engine struct {
 	runtime  wazero.Runtime
 	bindings *bindingTable
 	egress   Egress
+	services HostServices
 }
 
 // EngineOption configures an Engine.
@@ -21,7 +22,8 @@ type EngineOption func(*engineConfig)
 
 // engineConfig is the resolved configuration of one Engine.
 type engineConfig struct {
-	egress Egress
+	egress   Egress
+	services HostServices
 }
 
 // WithHTTPTransport injects the transport used for guest HTTP exchanges. The
@@ -50,6 +52,14 @@ func WithHTTPCredentialResolver(resolve func(name string) (string, bool)) Engine
 	return func(c *engineConfig) { c.egress.Credentials = resolve }
 }
 
+// WithHostServices injects the host-side contract behind the job, publish,
+// and cancellation imports. Without it those imports decline cleanly: job and
+// publish calls fail with the generic failure code and cancel_poll answers
+// not-canceled, so an engine without a host stays usable.
+func WithHostServices(services HostServices) EngineOption {
+	return func(c *engineConfig) { c.services = services }
+}
+
 // NewEngine creates a new WASM execution engine with default configuration.
 //
 // The WASI snapshot preview 1 host module is instantiated so guests built for
@@ -72,7 +82,7 @@ func NewEngine(ctx context.Context, opts ...EngineOption) (*Engine, error) {
 		_ = r.Close(ctx)
 		return nil, fmt.Errorf("wasm: registering host module: %w", err)
 	}
-	return &Engine{runtime: r, bindings: newBindingTable(), egress: cfg.egress}, nil
+	return &Engine{runtime: r, bindings: newBindingTable(), egress: cfg.egress, services: cfg.services}, nil
 }
 
 // Close releases resources associated with the WASM runtime.

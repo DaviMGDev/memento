@@ -31,6 +31,8 @@ type execState struct {
 	bound        []mcontext.KeyID
 	egress       Egress
 	httpResp     []byte
+	services     HostServices
+	jobResult    []byte
 }
 
 type execCtxKey struct{}
@@ -88,6 +90,27 @@ func RegisterHostModule(ctx context.Context, r wazero.Runtime) error {
 		NewFunctionBuilder().
 		WithFunc(hostHTTPResponse).
 		Export("http_response").
+		NewFunctionBuilder().
+		WithFunc(hostJobStart).
+		Export("job_start").
+		NewFunctionBuilder().
+		WithFunc(hostJobPeep).
+		Export("job_peep").
+		NewFunctionBuilder().
+		WithFunc(hostJobKill).
+		Export("job_kill").
+		NewFunctionBuilder().
+		WithFunc(hostJobResultLen).
+		Export("job_result_len").
+		NewFunctionBuilder().
+		WithFunc(hostJobResult).
+		Export("job_result").
+		NewFunctionBuilder().
+		WithFunc(hostPublish).
+		Export("publish").
+		NewFunctionBuilder().
+		WithFunc(hostCancelPoll).
+		Export("cancel_poll").
 		NewFunctionBuilder().
 		WithFunc(hostLog).
 		Export("log").
@@ -238,6 +261,9 @@ func hostBind(ctx context.Context, m api.Module, keyPtr, keyLen, valPtr, valLen 
 	if s == nil || s.instance == nil {
 		return 1
 	}
+	if s.canceled() {
+		return CanceledCode
+	}
 	name, err := readString(m, keyPtr, keyLen)
 	if err != nil {
 		return 1
@@ -295,6 +321,9 @@ func hostGet(ctx context.Context, m api.Module, keyPtr, keyLen, bufPtr, bufMax u
 func hostInvoke(ctx context.Context, m api.Module, keyPtr, keyLen, reqPtr, reqLen, respPtr, respMax uint32) uint32 {
 	caller := getExecState(ctx)
 	if caller == nil || caller.instance == nil {
+		return 0
+	}
+	if caller.canceled() {
 		return 0
 	}
 	name, err := readString(m, keyPtr, keyLen)
@@ -355,6 +384,125 @@ func hostInvoke(ctx context.Context, m api.Module, keyPtr, keyLen, reqPtr, reqLe
 		return 0
 	}
 	return n
+}
+
+// callJobService is the shared body of the job imports: it resolves the
+// caller, declines when no host service or active instance exists, fails with
+// the canceled code when the caller's job was killed, reads the request
+// document, and stashes the result document the service returns.
+func callJobService(ctx context.Context, m api.Module, reqPtr, reqLen uint32, call func(s *execState, req []byte) ([]byte, error)) uint32 {
+	s := getExecState(ctx)
+	if s == nil || s.instance == nil || s.services == nil {
+		return FailureCode
+	}
+	if s.canceled() {
+		return CanceledCode
+	}
+	req, err := readBytes(m, reqPtr, reqLen)
+	if err != nil {
+		return FailureCode
+	}
+	doc, err := call(s, req)
+	if err != nil {
+		return FailureCode
+	}
+	s.mu.Lock()
+	s.jobResult = doc
+	s.mu.Unlock()
+	return 0
+}
+
+// hostJobStart starts a job through the injected host services and stashes
+// the service's result document. It returns as soon as the service produced
+// the document; it never waits for the job to finish.
+func hostJobStart(ctx context.Context, m api.Module, reqPtr, reqLen uint32) uint32 {
+	return callJobService(ctx, m, reqPtr, reqLen, func(s *execState, req []byte) ([]byte, error) {
+		return s.services.StartJob(s.instance, req)
+	})
+}
+
+// hostJobPeep reads one job's status through the injected host services and
+// stashes the service's result document.
+func hostJobPeep(ctx context.Context, m api.Module, reqPtr, reqLen uint32) uint32 {
+	return callJobService(ctx, m, reqPtr, reqLen, func(s *execState, req []byte) ([]byte, error) {
+		return s.services.PeepJob(s.instance, req)
+	})
+}
+
+// hostJobKill kills one job through the injected host services and stashes
+// the service's result document.
+func hostJobKill(ctx context.Context, m api.Module, reqPtr, reqLen uint32) uint32 {
+	return callJobService(ctx, m, reqPtr, reqLen, func(s *execState, req []byte) ([]byte, error) {
+		return s.services.KillJob(s.instance, req)
+	})
+}
+
+// hostJobResultLen returns the length of the stashed job result document.
+func hostJobResultLen(ctx context.Context, m api.Module) uint32 {
+	s := getExecState(ctx)
+	if s == nil || s.instance == nil {
+		return 0
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return uint32(len(s.jobResult))
+}
+
+// hostJobResult copies the stashed job result document into the caller's
+// buffer, at most maxLen bytes, and returns the count copied.
+func hostJobResult(ctx context.Context, m api.Module, bufPtr, maxLen uint32) uint32 {
+	s := getExecState(ctx)
+	if s == nil || s.instance == nil {
+		return 0
+	}
+	s.mu.Lock()
+	doc := s.jobResult
+	s.mu.Unlock()
+	if len(doc) == 0 {
+		return 0
+	}
+	if uint32(len(doc)) > maxLen {
+		doc = doc[:maxLen]
+	}
+	mem := m.Memory()
+	if mem == nil || !mem.Write(bufPtr, doc) {
+		return 0
+	}
+	return uint32(len(doc))
+}
+
+// hostPublish delivers one event to the host bus through the injected host
+// services.
+func hostPublish(ctx context.Context, m api.Module, topicPtr, topicLen, payloadPtr, payloadLen uint32) uint32 {
+	s := getExecState(ctx)
+	if s == nil || s.instance == nil || s.services == nil {
+		return FailureCode
+	}
+	if s.canceled() {
+		return CanceledCode
+	}
+	topic, err := readString(m, topicPtr, topicLen)
+	if err != nil || topic == "" {
+		return FailureCode
+	}
+	payload, err := readBytes(m, payloadPtr, payloadLen)
+	if err != nil {
+		return FailureCode
+	}
+	if err := s.services.Publish(topic, payload); err != nil {
+		return FailureCode
+	}
+	return 0
+}
+
+// hostCancelPoll answers whether the calling job was killed: 0 to keep
+// going, the canceled code to unwind.
+func hostCancelPoll(ctx context.Context, m api.Module) uint32 {
+	s := getExecState(ctx)
+	if s == nil || s.instance == nil || !s.canceled() {
+		return 0
+	}
+	return CanceledCode
 }
 
 // allocBuffer asks a provider module for a buffer of at least size bytes.
