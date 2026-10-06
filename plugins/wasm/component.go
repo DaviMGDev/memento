@@ -80,6 +80,9 @@ type WASMComponent struct {
 	decls    runtime.Declarations
 	keys     *KeyRegistry
 	cfg      componentConfig
+
+	mu   sync.Mutex
+	live *execState
 }
 
 // NewComponent compiles wasmBytes and returns a runtime.Component.
@@ -217,6 +220,9 @@ func (c *WASMComponent) Activate(inst *runtime.Instance, payload any) error {
 		egress:       c.engine.egress,
 		services:     c.engine.services,
 	}
+	c.mu.Lock()
+	c.live = st
+	c.mu.Unlock()
 
 	// Push module cleanup as the bottom-most effect so it closes after all guest inverses run.
 	if err := inst.Context().RegisterEffect(func() (func() error, error) {
@@ -224,6 +230,11 @@ func (c *WASMComponent) Activate(inst *runtime.Instance, payload any) error {
 			modMu.Lock()
 			defer modMu.Unlock()
 			c.engine.bindings.forget(st)
+			c.mu.Lock()
+			if c.live == st {
+				c.live = nil
+			}
+			c.mu.Unlock()
 			return mod.Close(context.Background())
 		}, nil
 	}); err != nil {
@@ -252,6 +263,65 @@ func (c *WASMComponent) Activate(inst *runtime.Instance, payload any) error {
 	}
 
 	return nil
+}
+
+// handleRespMax bounds one host-side handler response. A handler returning
+// more than this fails the call rather than truncating silently.
+const handleRespMax uint32 = 64 * 1024
+
+// Handle invokes the component's exported memento_handle on its live
+// instance — the host-side counterpart of memento.invoke. It blocks on the
+// instance's module lock, so a host wake waits for a call in flight instead
+// of preempting it, and host imports inside the handler are attributed to the
+// instance (cancellation, caller identity). It fails when the component is
+// not active or exports no handler.
+func (c *WASMComponent) Handle(ctx context.Context, req []byte) ([]byte, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	c.mu.Lock()
+	st := c.live
+	c.mu.Unlock()
+	if st == nil {
+		return nil, fmt.Errorf("wasm: component is not active")
+	}
+
+	st.modMu.Lock()
+	defer st.modMu.Unlock()
+
+	alloc := st.mod.ExportedFunction("memento_alloc")
+	handle := st.mod.ExportedFunction("memento_handle")
+	mem := st.mod.Memory()
+	if alloc == nil || handle == nil || mem == nil {
+		return nil, fmt.Errorf("wasm: component does not export memento_alloc/memento_handle")
+	}
+
+	execCtx := withExecState(ctx, st)
+	reqPtr, ok := allocBuffer(execCtx, alloc, uint32(len(req)))
+	if !ok {
+		return nil, fmt.Errorf("wasm: allocating request buffer")
+	}
+	if len(req) > 0 && !mem.Write(reqPtr, req) {
+		return nil, fmt.Errorf("wasm: writing request into guest memory")
+	}
+	respPtr, ok := allocBuffer(execCtx, alloc, handleRespMax)
+	if !ok {
+		return nil, fmt.Errorf("wasm: allocating response buffer")
+	}
+
+	res, err := handle.Call(execCtx, uint64(reqPtr), uint64(len(req)), uint64(respPtr), uint64(handleRespMax))
+	if err != nil || len(res) == 0 {
+		return nil, fmt.Errorf("wasm: handle call failed: %w", err)
+	}
+	n := uint32(res[0])
+	if n > handleRespMax {
+		return nil, fmt.Errorf("wasm: handle returned %d bytes, over the %d cap", n, handleRespMax)
+	}
+	resp, ok := mem.Read(respPtr, n)
+	if !ok {
+		return nil, fmt.Errorf("wasm: reading response from guest memory")
+	}
+	return append([]byte(nil), resp...), nil
 }
 
 // NewFactory returns a loader.Factory that yields a WASMComponent.
