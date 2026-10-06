@@ -3,7 +3,7 @@ type: index
 title: "plugins/wasm/specs/ — Index"
 description: "Node registry and reading order for the WASM loader plugin specification"
 created: "2026-10-05"
-updated: "2026-10-05"
+updated: "2026-10-06"
 ---
 
 # plugins/wasm/specs/ — Index
@@ -14,7 +14,7 @@ Project status: implemented
 
 | File | Title | Description |
 |------|-------|-------------|
-| [SPEC.md](SPEC.md) | WASM Component Loader — Specification | The plugin contract: host ABI, registration, values, invocation, module lifecycle, conformance, non-goals, decisions |
+| [SPEC.md](SPEC.md) | WASM Component Loader — Specification | The plugin contract: host ABI, registration, values, invocation, host services, module lifecycle, conformance, non-goals, decisions |
 | [features/abi.feature](features/abi.feature) | WASM host ABI | Conformance scenarios: bind registration, unbound provides, value reads, invocation routing |
 | [features/transport.feature](features/transport.feature) | WASM host HTTP transport | Conformance scenarios: host-performed exchanges, egress policy, timeouts, pure declarations |
 | [features/lifecycle.feature](features/lifecycle.feature) | WASM component lifecycle | Conformance scenarios: one instance per activation, reactor initialization, effect reversal |
