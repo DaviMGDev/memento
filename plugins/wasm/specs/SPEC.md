@@ -205,10 +205,13 @@ bytes; queueing, delivery, and subscriber wakes belong to the host.
 `cancel_poll` answers whether the host killed the job the caller is executing:
 `0` means keep going, the canceled code means unwind at the next safe point.
 The host answers for the calling job only. While a caller's job is killed,
-every subsequent host import fails with the canceled code except `log`
-(best-effort) and `cancel_poll` itself, which reports the canceled code as its
-positive answer — so a killed call unwinds at its next host import even if it
-never polls. Error codes are shared: `0` success, `1` failure, `2` canceled.
+every subsequent status-bearing action import fails with the canceled code
+except `log` (best-effort) and `cancel_poll` itself, which reports the canceled
+code as its positive answer — so a killed call unwinds at its next host import
+even if it never polls. Imports that return a count — the length/copy pair
+and `invoke`, which returns a response length — keep their convention and
+report absent (`0`); the guest falls through to its next status-bearing call.
+Error codes are shared: `0` success, `1` failure, `2` canceled.
 
 Services are optional and injected. With no host services configured, job and
 publish imports fail with code `1` and `cancel_poll` answers `0`, so an engine
@@ -286,6 +289,8 @@ Executable conformance lives in the package's own test suite
   `job_result_len`/`job_result` — so a large result costs a second read, never
   a second call, and `job_start` returns without waiting for the job.
 - **D13 — Cancellation is a poll and a code.** While the calling job is killed,
-  every host import except `log` fails with the canceled code (`2`), so a call
-  unwinds at its next host import even if it never polls; `cancel_poll` reports
-  the same code as its positive answer, for the calling job only.
+  every status-bearing action import except `log` fails with the canceled code
+  (`2`), so a call unwinds at its next host import even if it never polls;
+  count-returning imports (length/copy and `invoke`) report absent, and
+  `cancel_poll` reports the same code as its positive answer, for the calling
+  job only.
