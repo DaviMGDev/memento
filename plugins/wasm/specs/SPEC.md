@@ -152,6 +152,15 @@ value bound at a key is the capability, and `memento_handle` implements the
 operations that act on it. Values remain plain bytes; live Go values are not
 crossed.
 
+Invocation is symmetric across the boundary: `memento.invoke` lets a
+dependent reach a provider, and the host reaches a guest's own handler with
+`WASMComponent.Handle`. A host wake is a call like any other — it blocks on
+the instance's module lock, never preempting an activation, teardown, or
+handler in flight, and the guest's host imports inside it are attributed to
+the instance, so cancellation and caller identity answer for the wake. A
+component with no live instance, or without `memento_alloc`/`memento_handle`,
+fails the call.
+
 ## Transport
 
 Guests reach the network only through the host. A guest writes a JSON request
@@ -294,3 +303,7 @@ Executable conformance lives in the package's own test suite
   count-returning imports (length/copy and `invoke`) report absent, and
   `cancel_poll` reports the same code as its positive answer, for the calling
   job only.
+- **D14 — Host invocation is a first-class call.** `Handle` is the host-side
+  counterpart of `memento.invoke`: a waker, a test, or any host caller wakes a
+  guest the same way a dependent would, serialized by the module lock and
+  attributed to the instance.
