@@ -181,6 +181,9 @@ func hostHTTPRequest(ctx context.Context, m api.Module, reqPtr, reqLen uint32) u
 	if s == nil || s.instance == nil {
 		return 1
 	}
+	if s.canceled() {
+		return CanceledCode
+	}
 	return s.exchange(ctx, m, reqPtr, reqLen)
 }
 

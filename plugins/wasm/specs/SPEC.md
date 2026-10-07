@@ -3,9 +3,9 @@ type: spec
 title: "WASM Component Loader — Specification"
 description: "Runs capability code as WebAssembly guests on wazero: declarations, paper-faithful registration, value reads, and invocation, wired to the kernel's effects and coeffects."
 tags: [spec, plugin]
-sections: [context, abi, semantics, invocation, transport, lifecycle, conformance, non-goals, decisions]
+sections: [context, abi, semantics, invocation, transport, host-services, lifecycle, conformance, non-goals, decisions]
 created: "2026-10-05"
-updated: "2026-10-05"
+updated: "2026-10-06"
 ---
 
 # WASM Component Loader — Specification
@@ -80,6 +80,13 @@ Host imports:
 | `memento.http_request` | `(i32,i32) -> i32` | perform one HTTP exchange for a JSON request document |
 | `memento.http_response_len` | `() -> i32` | length of the stashed response document |
 | `memento.http_response` | `(i32,i32) -> i32` | copy the stashed response document |
+| `memento.job_start` | `(i32,i32) -> i32` | start a job from a JSON request document; stash the result document |
+| `memento.job_peep` | `(i32,i32) -> i32` | read one job's status from a JSON request document; stash the result document |
+| `memento.job_kill` | `(i32,i32) -> i32` | kill one job from a JSON request document; stash the result document |
+| `memento.job_result_len` | `() -> i32` | length of the stashed job result document |
+| `memento.job_result` | `(i32,i32) -> i32` | copy the stashed job result document |
+| `memento.publish` | `(i32,i32,i32,i32) -> i32` | publish an event (topic, payload) to the host bus |
+| `memento.cancel_poll` | `() -> i32` | ask whether the calling job was killed |
 | `memento.get_payload_len` | `() -> i32` | length of the activation payload |
 | `memento.get_payload` | `(i32,i32) -> i32` | copy the activation payload |
 | `memento.register_effect` | `(i32) -> i32` | register an opaque effect id whose inverse is `memento_revert_effect` |
@@ -177,6 +184,40 @@ Reads require an active instance. Declaration runs on a probe with no egress,
 so a request from `memento_declare` fails: declarations describe the component,
 they do not act.
 
+## Host Services
+
+Guests reach host-owned jobs and events through imports that route to a
+`HostServices` contract the embedding host injects (`WithHostServices`). The
+loader treats every document as opaque bytes: the service parses the request,
+owns the semantics, and returns the result document.
+
+Job calls carry one JSON request document — the shape of a tool call is the
+service's concern — and stash one JSON result document, read back with
+`job_result_len` and `job_result`, exactly like the HTTP response pair. A
+result larger than the guest anticipated costs a second read, never a second
+call; each job call replaces the instance's stash. `job_start` returns as soon
+as the service has produced the result document; it never waits for the job to
+finish.
+
+`publish` delivers one event to the host bus. Topic and payload cross as
+bytes; queueing, delivery, and subscriber wakes belong to the host.
+
+`cancel_poll` answers whether the host killed the job the caller is executing:
+`0` means keep going, the canceled code means unwind at the next safe point.
+The host answers for the calling job only. While a caller's job is killed,
+every subsequent status-bearing action import fails with the canceled code
+except `log` (best-effort) and `cancel_poll` itself, which reports the canceled
+code as its positive answer — so a killed call unwinds at its next host import
+even if it never polls. Imports that return a count — the length/copy pair
+and `invoke`, which returns a response length — keep their convention and
+report absent (`0`); the guest falls through to its next status-bearing call.
+Error codes are shared: `0` success, `1` failure, `2` canceled.
+
+Services are optional and injected. With no host services configured, job and
+publish imports fail with code `1` and `cancel_poll` answers `0`, so an engine
+without a host stays usable. Declaration runs on a probe with no instance:
+job and publish imports fail from `memento_declare`, like `http_request`.
+
 ## Lifecycle
 
 One module instance per activation. The host instantiates the compiled module,
@@ -238,3 +279,18 @@ Executable conformance lives in the package's own test suite
   carry `env:NAME` references; the host resolves them through its configured
   resolver, and an unavailable reference fails the exchange. Secrets never
   enter guest memory, and the kernel stays free of a particular secret store.
+- **D11 — Host services are injected, never built in.** The job, publish, and
+  cancel imports route to a `HostServices` contract supplied through
+  `WithHostServices`; the loader passes opaque bytes and the caller's instance
+  and owns nothing about tools, topics, or job records. Unconfigured services
+  decline: job and publish calls fail, `cancel_poll` answers `0`.
+- **D12 — Job results are stashed documents.** `job_start`/`job_peep`/`job_kill`
+  take one request document and stash one result document — read back with
+  `job_result_len`/`job_result` — so a large result costs a second read, never
+  a second call, and `job_start` returns without waiting for the job.
+- **D13 — Cancellation is a poll and a code.** While the calling job is killed,
+  every status-bearing action import except `log` fails with the canceled code
+  (`2`), so a call unwinds at its next host import even if it never polls;
+  count-returning imports (length/copy and `invoke`) report absent, and
+  `cancel_poll` reports the same code as its positive answer, for the calling
+  job only.

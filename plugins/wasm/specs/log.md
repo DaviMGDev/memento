@@ -3,10 +3,27 @@ type: log
 title: "plugins/wasm/specs/ log"
 description: "Activity log for the WASM loader plugin specification"
 created: "2026-10-05"
-updated: "2026-10-05"
+updated: "2026-10-06"
 ---
 
 # plugins/wasm/specs/ log
+
+## 2026-10-06
+
+- Implemented the host-services ABI: `HostServices` injected through
+  `WithHostServices`, the seven imports wired and registered, cancellation
+  gating on status-bearing action imports, and `features/host-services.feature`
+  as the normative scenarios, executed by `services_test.go` (stashed read-back,
+  caller attribution, unset decline, declaration-probe refusal, publish, and
+  cancellation). Refs: core-agent#6.
+- Specified the host-services ABI (D11-D13): `job_start`/`job_peep`/`job_kill`
+  route opaque request documents to an injected `HostServices` contract and
+  stash one result document (`job_result_len`/`job_result`), so a large result
+  costs a second read and `job_start` never waits on a job; `publish` reaches
+  the host bus; `cancel_poll` answers for the calling job only, and a killed
+  caller's host imports fail with the canceled code (`2`). Additive: existing
+  exports and guests are untouched; unconfigured services decline cleanly.
+  Refs: core-agent#6.
 
 ## 2026-10-05
 
